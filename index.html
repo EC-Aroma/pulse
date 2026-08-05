@@ -20,7 +20,7 @@
   --hudbg:#05060a; --npbg:#0b0c10; --shadow:rgba(0,0,0,.45);
   --toastbg:#e9ecf4; --toasttxt:#0b0c10; --logbg:#0e1116; --logtxt:#c7cede;
   --sliderbg:#333a47; --ringbg:#22262f; --switchoff:#2b3140; --thumb:#fff;
-  --grad:linear-gradient(135deg,var(--a1),var(--a2));
+  --grad:linear-gradient(100deg,var(--a1) 0%,var(--a2) 100%);
   --nav-h:64px; --mini-h:62px;
   --safe-b:env(safe-area-inset-bottom,0px);
   --safe-t:env(safe-area-inset-top,0px);
@@ -64,14 +64,18 @@ svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.9;stroke
 svg .fill{fill:currentColor;stroke:none}
 .text-btn{color:var(--mut);padding:10px 6px;font-size:15px}
 .text-btn.strong{color:var(--a1);font-weight:700}
-.primary{background:var(--grad);color:#fff;font-weight:700;border-radius:14px;padding:14px 18px}
+.primary{background:var(--grad);color:#fff;font-weight:700;border-radius:14px;padding:13px 17px;
+  border:1px solid transparent;background-clip:padding-box;-webkit-background-clip:padding-box;
+  background-repeat:no-repeat;background-size:100% 100%}
 .primary:active{filter:brightness(.9)}
 .primary.wide,.ghost.wide,.danger.wide{display:block;width:calc(100% - 32px);margin:10px 16px}
 .ghost{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:13px 16px;color:var(--txt)}
 .danger{background:#2a1216;border:1px solid #63202a;color:#ff8090;border-radius:14px;padding:13px 16px}
 .big{padding:18px 20px;font-size:18px}
 .chip{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:9px 14px;font-size:14px;color:var(--txt)}
-.chip.on{background:var(--grad);border-color:transparent;color:#fff;font-weight:700}
+.chip.on{background:var(--grad);border-color:transparent;color:#fff;font-weight:700;
+  background-clip:padding-box;-webkit-background-clip:padding-box;
+  background-repeat:no-repeat;background-size:100% 100%}
 .row-btns{display:flex;gap:10px;flex-wrap:wrap;padding:0 16px;margin-top:6px}
 .row-btns>*{flex:1;min-width:130px}
 
@@ -79,7 +83,9 @@ svg .fill{fill:currentColor;stroke:none}
 .segmented{display:flex;gap:8px;overflow-x:auto;padding:12px 16px 4px;scrollbar-width:none}
 .segmented::-webkit-scrollbar{display:none}
 .segmented button{white-space:nowrap;background:var(--card);border:1px solid var(--line);border-radius:999px;padding:9px 15px;font-size:14px;color:var(--mut)}
-.segmented button.on{background:var(--grad);color:#fff;border-color:transparent;font-weight:700}
+.segmented button.on{background:var(--grad);color:#fff;border-color:transparent;font-weight:700;
+  background-clip:padding-box;-webkit-background-clip:padding-box;
+  background-repeat:no-repeat;background-size:100% 100%}
 .sortrow{display:flex;align-items:center;gap:10px;padding:10px 16px}
 .sortrow label{font-size:13px;color:var(--mut)}
 select,input[type=number],input[type=text],input:not([type]),input[type=search]{
@@ -160,7 +166,9 @@ input[type=range]{-webkit-appearance:none;width:100%;height:26px;background:none
 input[type=range]::-webkit-slider-runnable-track{height:5px;border-radius:3px;background:var(--sliderbg)}
 input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:var(--thumb);margin-top:-6.5px;box-shadow:0 2px 6px rgba(0,0,0,.5)}
 .np-controls{display:flex;align-items:center;justify-content:space-between;margin:18px 0 8px}
-.play-fab{width:78px;height:78px;border-radius:50%;background:var(--grad);display:grid;place-items:center;color:#fff;box-shadow:0 12px 30px rgba(255,62,88,.35)}
+.play-fab{width:78px;height:78px;border-radius:50%;background:var(--grad);display:grid;place-items:center;color:#fff;
+  box-shadow:0 12px 30px color-mix(in srgb,var(--a1) 32%,transparent);
+  border:1px solid transparent;background-clip:padding-box;-webkit-background-clip:padding-box}
 .play-fab svg{width:34px;height:34px}
 #npShuffle.on,#npRepeat.on{color:var(--a1)}
 .np-row2{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:auto;padding-top:16px}
@@ -358,7 +366,8 @@ html[data-chips="solid"] .play-fab{background:var(--a1)}
 
 /* ── theme picker ── */
 .swatches{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:2px 16px}
-.swatch{aspect-ratio:1/1;border-radius:14px;border:2px solid transparent;position:relative;overflow:hidden}
+.swatch{aspect-ratio:1/1;border-radius:14px;border:2px solid transparent;position:relative;overflow:hidden;
+  background-clip:padding-box;-webkit-background-clip:padding-box}
 .swatch.on{border-color:var(--txt)}
 .swatch span{position:absolute;left:0;right:0;bottom:0;font-size:9.5px;text-transform:uppercase;letter-spacing:.06em;
   color:#fff;background:rgba(0,0,0,.35);padding:2px 0;text-align:center}
@@ -437,6 +446,26 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
 .jumpbar::-webkit-scrollbar{display:none}
 .jumpbar button{white-space:nowrap;background:var(--card);border:1px solid var(--line);border-radius:999px;padding:8px 13px;font-size:13px;color:var(--mut)}
 .jumpbar button:active{background:var(--card2)}
+
+/* ── crisp accent surfaces ──────────────────────────────────────────
+   Two things caused the smeared edges ("ça bave"):
+   1. a transparent 1px border with the gradient painted underneath it,
+      so the fill showed through as a soft halo — fixed with padding-box
+      clipping on every accent surface;
+   2. each element slicing the gradient over its own box, so a small pill
+      and a wide button never matched — fixed by one shared angle above.
+   This last rule kills the residual anti-alias fringe on round shapes. */
+.chip.on,.segmented button.on,.primary,.play-fab,.swatch,
+.hud-controls .hud-main,#updateApply,.as-cancel.on{
+  background-origin:padding-box;
+  transform:translateZ(0);              /* own compositing layer = clean edge */
+  -webkit-font-smoothing:antialiased;
+}
+.hud-controls .hud-main{border:1px solid transparent;background-clip:padding-box;-webkit-background-clip:padding-box}
+#miniProgBar,.bar,.spark{background-repeat:no-repeat;background-size:100% 100%}
+/* the mini player and progress fills sat on a 1px track edge too */
+.mini-prog{overflow:hidden;border-radius:0}
+.bar{border-radius:5px;background-clip:padding-box}
 
 </style>
 </head>
@@ -873,7 +902,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '7.5.0';
+const APP_VERSION = '7.6.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
