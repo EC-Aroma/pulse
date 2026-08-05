@@ -1,7 +1,7 @@
 /* Pulse service worker — offline app shell.
    Your music itself lives in IndexedDB, not here, so the app works
    with zero network once installed. */
-const VERSION = 'pulse-v7.2.0';
+const VERSION = 'pulse-v7.3.0';
 const SHELL = [
   './',
   './index.html',
@@ -29,6 +29,44 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('message', (e) => {
   if (e.data === 'skipWaiting') self.skipWaiting();
+});
+
+/* ---- background update check (Chrome wakes installed PWAs on a schedule) ---- */
+const GH_API = 'https://api.github.com/repos/EC-Aroma/pulse/commits?per_page=1&sha=main';
+async function checkForUpdate() {
+  try {
+    const res = await fetch(GH_API, { headers: { Accept: 'application/vnd.github+json' }, cache: 'no-store' });
+    if (!res.ok) return;
+    const d = await res.json();
+    const c = Array.isArray(d) ? d[0] : null;
+    if (!c) return;
+    const meta = await caches.open('pulse-meta');
+    const prev = await meta.match('./applied-sha');
+    const applied = prev ? await prev.text() : null;
+    if (!applied) { await meta.put('./applied-sha', new Response(c.sha)); return; }
+    if (applied === c.sha) return;
+    const seen = await meta.match('./notified-sha');
+    if (seen && (await seen.text()) === c.sha) return;      // do not nag twice
+    await meta.put('./notified-sha', new Response(c.sha));
+    await self.registration.showNotification('Pulse update available', {
+      body: (c.commit && c.commit.message || '').split('\n')[0] || 'A newer build is on GitHub',
+      icon: './icon-192.png', badge: './icon-192.png', tag: 'pulse-update'
+    });
+  } catch (e) {}
+}
+self.addEventListener('periodicsync', (e) => {
+  if (e.tag === 'pulse-update-check') e.waitUntil(checkForUpdate());
+});
+self.addEventListener('sync', (e) => {
+  if (e.tag === 'pulse-update-check') e.waitUntil(checkForUpdate());
+});
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  e.waitUntil((async () => {
+    const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const c of all) if (c.url.includes('/pulse')) { c.focus(); return; }
+    await self.clients.openWindow('./index.html?update=1');
+  })());
 });
 
 const SHARE_CACHE = 'pulse-shared';

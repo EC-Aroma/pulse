@@ -413,6 +413,12 @@ html[data-theme="light"] .vid-badge{background:#e2ecfb;color:#1d5b9e}
 #vizFull.rot .vf-meta[data-pos="bl"],#vizFull.rot .vf-meta[data-pos="tl"]{text-align:left}
 #vizFull.rot .vf-hint{display:none}
 
+/* ── pull-to-check bar ── */
+#pullBar{height:0;overflow:hidden;display:flex;align-items:center;justify-content:center;
+  font-size:12.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--mut);
+  background:var(--card);transition:height .18s}
+#pullBar.on{border-bottom:1px solid var(--line)}
+
 </style>
 </head>
 <body>
@@ -573,6 +579,7 @@ html[data-theme="light"] .vid-badge{background:#e2ecfb;color:#1d5b9e}
           <button class="ghost" id="btnImportVideo">Video → audio only</button>
           <button class="ghost" id="btnAddLink">+ Add an audio link</button>
           <button class="ghost" id="btnDiagnose">Diagnose a video file</button>
+          <button class="primary" id="btnArchive">Find free sets &amp; concerts</button>
         </div>
         <p class="hint" id="videoHint">Pick a video file (mp4, mov, webm…) and Pulse keeps just the soundtrack, re-compressed small. Nothing is uploaded — the conversion happens on your phone.<br><br>
         <b>From a YouTube link:</b> paste one and Pulse offers the routes that actually work — Studio download for your own uploads, background listening in Firefox, or finding an audio version.<br><br>
@@ -596,12 +603,14 @@ html[data-theme="light"] .vid-badge{background:#e2ecfb;color:#1d5b9e}
           </select>
         </label>
 
-        <h3 class="section-h">Connection &amp; updates</h3>
+        <h3 class="section-h">App updates</h3>
+        <div id="updBody"></div>
+
+        <h3 class="section-h">Connection</h3>
         <div id="connInfo" class="card muted"></div>
         <label class="switch"><input type="checkbox" id="setWifiOnly" checked><span>Only check for updates on Wi-Fi</span></label>
         <label class="switch"><input type="checkbox" id="setNoData"><span>Never use mobile data at all (airplane-safe mode)</span></label>
         <div class="row-btns">
-          <button class="ghost" id="btnCheckUpdate">Check for an update now</button>
           <button class="ghost" id="btnPrecache">Re-download app files for offline</button>
         </div>
 
@@ -831,7 +840,7 @@ html[data-theme="light"] .vid-badge{background:#e2ecfb;color:#1d5b9e}
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '7.2.0';
+const APP_VERSION = '7.3.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -1910,6 +1919,7 @@ async function renderSettings() {
   if (window.THEME) { THEME.apply(); THEME.render(); }
   if (window.FX) FX.renderMixer();
   if (window.OPS) OPS.renderConn();
+  if (window.UPD) UPD.renderPanel();
   const bytes = T.list().reduce((n, t) => n + (t.size || 0), 0);
   let quota = '';
   try {
@@ -2521,6 +2531,7 @@ function wire() {
   $('btnImportVideoKeep').onclick = () => $('videoKeepInput').click();
   $('videoKeepInput').onchange = (e) => { const f = [...e.target.files]; e.target.value = ''; VID.importVideosKeep(f); };
   $('btnDiagnose').onclick = () => $('diagInput').click();
+  $('btnArchive').onclick = () => ARCH.openSearch('');
   $('diagInput').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) { toast('Inspecting…'); VID.diagnose(f); } };
   $('btnPersist').onclick = () => requestPersist(false);
 
@@ -4390,8 +4401,15 @@ ${JSON.stringify(r, null, 2)}`;
     if (!mayNet()) return;
     toast('Downloading…');
     try {
-      const r = await fetch(t.streamUrl, { mode: 'cors' });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
+      let r = null, err = null;
+      for (const u of [t.streamUrl, t.altUrl].filter(Boolean)) {
+        try {
+          const res = await fetch(u, { mode: 'cors' });
+          if (res.ok) { r = res; if (u !== t.streamUrl) { t.streamUrl = u; } break; }
+          err = new Error('HTTP ' + res.status);
+        } catch (e) { err = e; }
+      }
+      if (!r) throw err || new Error('unreachable');
       const blob = await r.blob();
       if (!blob.size) throw new Error('empty file');
       await DB.put('audio', blob, id);
@@ -4470,16 +4488,10 @@ ${JSON.stringify(r, null, 2)}`;
       S.settings.noData = e.target.checked; saveSettings();
       toast(e.target.checked ? 'Airplane-safe mode: the app will never touch the network' : 'Network allowed again');
     };
-    const cu = $('btnCheckUpdate'); if (cu) cu.onclick = () => checkUpdate(true);
     const pc = $('btnPrecache'); if (pc) pc.onclick = () => precache();
     const rp = $('btnReport'); if (rp) rp.onclick = () => reportProblem();
     const dl = $('btnDiagLog'); if (dl) dl.onclick = async () => showLog(reportText(await buildReport('')));
     const al = $('btnAddLink'); if (al) al.onclick = () => addLink();
-    $('updateApply').onclick = () => {
-      if (waiting) { waiting.postMessage('skipWaiting'); toast('Updating…'); }
-      else location.reload();
-    };
-    $('updateLater').onclick = () => $('updateBar').classList.add('hidden');
   }
 
   async function init() {
@@ -4497,8 +4509,6 @@ ${JSON.stringify(r, null, 2)}`;
       else navigator.serviceWorker.ready.then(watch).catch(() => {});
     }
     /* auto check, at most every 6 hours, wifi only unless told otherwise */
-    const age = Date.now() - (S.settings.lastUpdateCheck || 0);
-    if (age > 6 * 3600 * 1000) setTimeout(() => checkUpdate(false), 4000);
     handleShared();
   }
 
@@ -5438,6 +5448,366 @@ const VIZFULL = (() => {
   return { show, hide, isOpen, init, resetIdle, allowed, applyOrientation };
 })();
 window.VIZFULL = VIZFULL;
+
+/* ============================================================
+   Pulse UPDATER — pull the newest build straight from GitHub,
+   with a notification when one appears.
+   ============================================================ */
+const UPD = (() => {
+  const GH = { owner: 'EC-Aroma', repo: 'pulse', branch: 'main' };
+  const API = `https://api.github.com/repos/${GH.owner}/${GH.repo}/commits?per_page=1&sha=${GH.branch}`;
+  const META = 'pulse-meta';
+  let latest = null, busy = false;
+
+  async function readApplied() {
+    try {
+      const c = await caches.open(META);
+      const r = await c.match('./applied-sha');
+      return r ? (await r.text()) : null;
+    } catch (e) { return null; }
+  }
+  async function writeApplied(sha) {
+    try { const c = await caches.open(META); await c.put('./applied-sha', new Response(sha)); } catch (e) {}
+  }
+
+  async function fetchLatest() {
+    const r = await fetch(API, { headers: { Accept: 'application/vnd.github+json' }, cache: 'no-store' });
+    if (!r.ok) throw new Error('GitHub said ' + r.status);
+    const d = await r.json();
+    const c = Array.isArray(d) ? d[0] : null;
+    if (!c) throw new Error('no commits found');
+    return {
+      sha: c.sha,
+      short: c.sha.slice(0, 7),
+      message: (c.commit && c.commit.message || '').split('\n')[0],
+      date: c.commit && c.commit.committer && c.commit.committer.date
+    };
+  }
+
+  /* the visible check: says exactly what is waiting, or that you are current */
+  async function check(manual) {
+    if (busy) return;
+    if (!OPS.mayUseNetwork(manual)) { if (manual) toast('No connection (or airplane-safe mode is on)'); return; }
+    busy = true;
+    if (manual) toast('Asking GitHub…');
+    try {
+      latest = await fetchLatest();
+      const applied = await readApplied();
+      if (!applied) { await writeApplied(latest.sha); }        /* first run: adopt as current */
+      const isNew = applied && applied !== latest.sha;
+      S.settings.lastUpdateCheck = Date.now();
+      S.settings.lastSeenSha = latest.sha;
+      saveSettings();
+      if (isNew) {
+        showBar(latest);
+        notify(latest);
+        if (navigator.serviceWorker) {
+          const reg = await navigator.serviceWorker.getRegistration();
+          if (reg) reg.update().catch(() => {});
+        }
+      } else if (manual) {
+        toast(`Up to date — ${latest.short}${latest.date ? ' · ' + new Date(latest.date).toLocaleDateString() : ''}`);
+      }
+      renderPanel();
+    } catch (e) {
+      if (manual) toast('Update check failed: ' + (e.message || e));
+    } finally { busy = false; }
+  }
+
+  function showBar(info) {
+    $('updateBar').classList.remove('hidden');
+    $('updateText').textContent = `New version on GitHub: ${info.message || info.short}`;
+  }
+
+  /* apply: swap in the waiting worker if there is one, otherwise hard-refresh
+     the shell from the network, then reload */
+  async function apply() {
+    toast('Updating…');
+    await writeApplied((latest && latest.sha) || S.settings.lastSeenSha || '');
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg) {
+        await reg.update().catch(() => {});
+        if (reg.waiting) { reg.waiting.postMessage('skipWaiting'); return; }   /* controllerchange reloads */
+      }
+      /* no waiting worker: refetch the shell ourselves so the reload is truly new */
+      for (const f of ['./index.html', './manifest.webmanifest', './sw.js']) {
+        try { await fetch(f, { cache: 'reload' }); } catch (e) {}
+      }
+    } catch (e) {}
+    setTimeout(() => location.reload(), 600);
+  }
+
+  /* ---------- notifications ---------- */
+  async function askNotify() {
+    if (!('Notification' in window)) { toast('This phone has no notification support in the browser'); return false; }
+    const p = await Notification.requestPermission();
+    S.settings.notifyUpdates = p === 'granted';
+    saveSettings();
+    toast(p === 'granted' ? 'Right — I will nudge you when an update appears' : 'Notifications refused');
+    if (p === 'granted') await registerPeriodic();
+    renderPanel();
+    return p === 'granted';
+  }
+  async function notify(info) {
+    try {
+      if (Notification.permission !== 'granted') return;
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (!reg) return;
+      reg.showNotification('Pulse update available', {
+        body: info.message || 'A newer build is on GitHub',
+        icon: './icon-192.png', badge: './icon-192.png',
+        tag: 'pulse-update', data: { sha: info.sha }
+      });
+    } catch (e) {}
+  }
+  /* Chrome can wake an installed PWA on a schedule — that is as close to a real
+     push as a server-less app can get, and it needs no account anywhere */
+  async function registerPeriodic() {
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      if (!('periodicSync' in reg)) return 'unsupported';
+      const st = await navigator.permissions.query({ name: 'periodic-background-sync' });
+      if (st.state !== 'granted') return 'not-granted';
+      await reg.periodicSync.register('pulse-update-check', { minInterval: 12 * 60 * 60 * 1000 });
+      return 'registered';
+    } catch (e) { return 'failed'; }
+  }
+  async function periodicState() {
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      if (!('periodicSync' in reg)) return 'not supported by this browser';
+      const tags = await reg.periodicSync.getTags();
+      return tags.includes('pulse-update-check') ? 'on — checks about twice a day in the background' : 'off';
+    } catch (e) { return 'unavailable'; }
+  }
+
+  /* ---------- pull down on the library to check ---------- */
+  function initPullToRefresh() {
+    let y0 = null, pulled = 0;
+    const bar = document.createElement('div');
+    bar.id = 'pullBar';
+    bar.textContent = 'Pull to check for an update';
+    document.getElementById('app').prepend(bar);
+    const main = document.getElementById('main');
+    main.addEventListener('touchstart', (e) => {
+      y0 = (window.scrollY <= 0 && e.touches.length === 1) ? e.touches[0].clientY : null;
+      pulled = 0;
+    }, { passive: true });
+    main.addEventListener('touchmove', (e) => {
+      if (y0 === null) return;
+      pulled = e.touches[0].clientY - y0;
+      if (pulled > 8) {
+        bar.classList.add('on');
+        bar.style.height = Math.min(64, pulled * 0.5) + 'px';
+        bar.textContent = pulled > 90 ? 'Release to check GitHub' : 'Pull to check for an update';
+      }
+    }, { passive: true });
+    main.addEventListener('touchend', () => {
+      if (pulled > 90) { bar.textContent = 'Checking…'; check(true); }
+      bar.classList.remove('on'); bar.style.height = '';
+      y0 = null; pulled = 0;
+    }, { passive: true });
+  }
+
+  /* ---------- settings panel ---------- */
+  async function renderPanel() {
+    const box = $('updBody');
+    if (!box) return;
+    const applied = await readApplied();
+    const per = await periodicState();
+    const seen = S.settings.lastSeenSha ? S.settings.lastSeenSha.slice(0, 7) : '—';
+    box.innerHTML = `
+      <div class="card muted">
+        Running <b>v${APP_VERSION}</b>${applied ? ` · build <b>${applied.slice(0, 7)}</b>` : ''}.<br>
+        Newest seen on GitHub: <b>${seen}</b>${latest && latest.message ? ` — ${esc(latest.message)}` : ''}<br>
+        Last checked: ${S.settings.lastUpdateCheck ? new Date(S.settings.lastUpdateCheck).toLocaleString() : 'never'}<br>
+        Background checks: <b>${esc(per)}</b>
+      </div>
+      <button class="primary wide" id="updNow">Check GitHub for an update</button>
+      <div class="row-btns">
+        <button class="ghost" id="updNotify">${Notification && Notification.permission === 'granted' ? 'Notifications are on' : 'Notify me about updates'}</button>
+        <button class="ghost" id="updForce">Force reinstall the app files</button>
+      </div>
+      <p class="hint">You can also pull down on the Library screen to check. Nothing installs by itself — you always get the bar at the top first, and your library is never touched by an update.</p>`;
+    $('updNow').onclick = () => check(true);
+    $('updNotify').onclick = () => askNotify();
+    $('updForce').onclick = async () => {
+      if (!confirm('Re-download the app files from GitHub and restart? Your music, tags and settings stay exactly as they are.')) return;
+      await apply();
+    };
+  }
+
+  async function init() {
+    $('updateApply').onclick = () => apply();
+    $('updateLater').onclick = () => $('updateBar').classList.add('hidden');
+    initPullToRefresh();
+    if (S.settings.notifyUpdates && 'Notification' in window && Notification.permission === 'granted') registerPeriodic();
+    const age = Date.now() - (S.settings.lastUpdateCheck || 0);
+    if (age > 6 * 3600 * 1000) setTimeout(() => check(false), 5000);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && Date.now() - (S.settings.lastUpdateCheck || 0) > 6 * 3600 * 1000) check(false);
+    });
+  }
+  return { init, check, apply, askNotify, renderPanel, GH, readApplied, fetchLatest };
+})();
+window.UPD = UPD;
+
+/* ============================================================
+   Pulse ARCHIVE — search the Internet Archive's free audio
+   (live sets, concerts, mixes, talks) and pull it in legally.
+   ============================================================ */
+const ARCH = (() => {
+  const SEARCH = 'https://archive.org/advancedsearch.php';
+  const META = 'https://archive.org/metadata/';
+  const DL = 'https://archive.org/download/';
+  const AUD = /\.(mp3|ogg|oga|opus|flac|m4a|wav)$/i;
+
+  async function search(q, page = 1) {
+    const url = `${SEARCH}?q=${encodeURIComponent(q + ' AND mediatype:(audio)')}` +
+      '&fl%5B%5D=identifier&fl%5B%5D=title&fl%5B%5D=creator&fl%5B%5D=year&fl%5B%5D=downloads' +
+      `&sort%5B%5D=downloads+desc&rows=25&page=${page}&output=json`;
+    const r = await fetch(url, { cache: 'no-store' });
+    if (!r.ok) throw new Error('Archive said ' + r.status);
+    const d = await r.json();
+    return ((d.response && d.response.docs) || []).map((x) => ({
+      id: x.identifier,
+      title: Array.isArray(x.title) ? x.title[0] : (x.title || x.identifier),
+      creator: Array.isArray(x.creator) ? x.creator[0] : (x.creator || ''),
+      year: x.year || '', downloads: x.downloads || 0
+    }));
+  }
+  async function tracksOf(id) {
+    const r = await fetch(META + encodeURIComponent(id), { cache: 'no-store' });
+    if (!r.ok) throw new Error('Archive said ' + r.status);
+    const d = await r.json();
+    const files = (d.files || []).filter((f) => AUD.test(f.name || ''));
+    /* one entry per recording: prefer the smallest usable format per title */
+    const byTitle = new Map();
+    for (const f of files) {
+      const key = (f.title || f.name).replace(AUD, '').toLowerCase();
+      const cur = byTitle.get(key);
+      const score = /\.mp3$/i.test(f.name) ? 0 : /\.(ogg|oga|opus|m4a)$/i.test(f.name) ? 1 : 2;
+      if (!cur || score < cur.score) byTitle.set(key, { f, score });
+    }
+    const server = d.server ? `https://${d.server}${d.dir}/` : null;
+    return [...byTitle.values()].map(({ f }) => ({
+      name: f.name,
+      title: (f.title || f.name.replace(AUD, '')).trim(),
+      creator: (d.metadata && (Array.isArray(d.metadata.creator) ? d.metadata.creator[0] : d.metadata.creator)) || '',
+      album: (d.metadata && (Array.isArray(d.metadata.title) ? d.metadata.title[0] : d.metadata.title)) || id,
+      year: (d.metadata && String(d.metadata.date || '').slice(0, 4)) || null,
+      seconds: parseFloat(f.length) || 0,
+      bytes: parseInt(f.size, 10) || 0,
+      url: (server || (DL + id + '/')) + encodeURIComponent(f.name),
+      fallbackUrl: DL + id + '/' + encodeURIComponent(f.name)
+    })).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async function addTrack(t, download) {
+    const id = uid();
+    const track = {
+      id, title: t.title, artist: t.creator || 'Internet Archive', album: t.album,
+      albumArtist: t.creator || 'Internet Archive', genre: 'Live / archive', year: t.year ? +t.year : null,
+      trackNo: null, bpm: null, energy: 0, tags: ['archive'], fav: false, playCount: 0, lastPlayed: 0,
+      duration: Math.round(t.seconds * 10) / 10, addedAt: Date.now(), fileName: t.name, mime: '',
+      size: t.bytes, artId: null, drop: 0, streamUrl: t.url, altUrl: t.fallbackUrl,
+      hasBlob: false, sourceUrl: t.fallbackUrl
+    };
+    S.tracks.set(id, track);
+    await DB.put('tracks', track);
+    if (download) await OPS.saveOffline(id);
+    return id;
+  }
+
+  function openSearch(prefill) {
+    $('pkTitle').textContent = 'Free audio — Internet Archive';
+    $('pkList').dataset.ctx = '{}';
+    $('pkList').innerHTML = `<div class="pad">
+        <label class="fld">Search live sets, concerts, mixes, talks
+          <input id="arcQ" type="search" value="${esc(prefill || '')}" placeholder="e.g. house dj set, jazz live 1975, ambient mix"></label>
+        <div class="row-btns" style="padding:0"><button class="primary" id="arcGo">Search</button></div>
+        <p class="hint" style="padding:0;margin-top:10px">Everything here is uploaded for free distribution — live recordings, netlabel releases, radio shows, concerts. Downloading is what the Archive is for, so it goes straight into your library and works offline.</p>
+      </div><div id="arcResults"></div>`;
+    openSheet('pickSheet');
+    const run = async () => {
+      const q = $('arcQ').value.trim();
+      if (!q) return;
+      $('arcResults').innerHTML = '<div class="empty">Searching…</div>';
+      try {
+        const rows = await search(q);
+        if (!rows.length) { $('arcResults').innerHTML = '<div class="empty"><b>Nothing found</b>Try fewer words.</div>'; return; }
+        $('arcResults').innerHTML = rows.map((r) => `<div class="row" data-arc="${esc(r.id)}">
+            <div class="art sm"></div>
+            <div class="r-meta"><div class="r-title">${esc(r.title)}</div>
+              <div class="r-sub">${esc(r.creator || '')}${r.year ? ' · ' + r.year : ''} · ${(r.downloads || 0).toLocaleString()} downloads</div></div>
+            <div class="r-right">›</div></div>`).join('');
+        els('#arcResults [data-arc]').forEach((n) => n.onclick = () => openItem(n.dataset.arc, q));
+      } catch (e) {
+        $('arcResults').innerHTML = `<div class="empty"><b>Could not reach the Archive</b>${esc(e.message || e)}<br><br>Check you are online, and that "Allow looking up artwork &amp; tags online" style network use is not blocked by airplane-safe mode.</div>`;
+      }
+    };
+    $('arcGo').onclick = run;
+    $('arcQ').onkeydown = (e) => { if (e.key === 'Enter') run(); };
+    if (prefill) run();
+  }
+
+  async function openItem(id, backQuery) {
+    $('pkTitle').textContent = 'Loading…';
+    $('pkList').innerHTML = '<div class="empty">Reading the recording…</div>';
+    try {
+      const tr = await tracksOf(id);
+      if (!tr.length) { $('pkList').innerHTML = '<div class="empty"><b>No audio files here</b>Go back and try another result.</div>'; return; }
+      const total = tr.reduce((n, t) => n + (t.bytes || 0), 0);
+      $('pkTitle').textContent = tr[0].album.slice(0, 40);
+      $('pkList').innerHTML = `<div class="pad">
+          <div class="card muted">${tr.length} track${tr.length === 1 ? '' : 's'} · ${fmtBytes(total)} · ${esc(tr[0].creator || 'unknown artist')}</div>
+          <div class="row-btns" style="padding:0">
+            <button class="primary" id="arcAddAll">Add all &amp; download</button>
+            <button class="ghost" id="arcStreamAll">Add as streams</button>
+            <button class="ghost" id="arcBack">Back to search</button>
+          </div></div>
+        ${tr.map((t, i) => `<div class="row" data-arct="${i}">
+            <div class="art sm"></div>
+            <div class="r-meta"><div class="r-title">${esc(t.title)}</div>
+              <div class="r-sub">${t.seconds ? fmtTime(t.seconds) : ''}${t.bytes ? ' · ' + fmtBytes(t.bytes) : ''}</div></div>
+            <button class="r-more">＋</button></div>`).join('')}`;
+      els('#pkList [data-arct]').forEach((n) => n.onclick = async () => {
+        const t = tr[+n.dataset.arct];
+        n.style.opacity = .5;
+        await addTrack(t, confirm(`Download "${t.title}" (${fmtBytes(t.bytes)}) so it plays offline?\n\nCancel = add it as a stream instead.`));
+        render(); toast('Added');
+        n.style.opacity = 1;
+      });
+      $('arcAddAll').onclick = async () => {
+        if (!confirm(`Download all ${tr.length} tracks — ${fmtBytes(total)}?`)) return;
+        $('importOverlay').classList.remove('hidden');
+        document.querySelector('#importOverlay .io-title').textContent = 'Downloading from the Archive…';
+        for (let i = 0; i < tr.length; i++) {
+          $('ioBar').style.width = ((i / tr.length) * 100).toFixed(1) + '%';
+          $('ioSub').textContent = `${i + 1} / ${tr.length} — ${tr[i].title.slice(0, 32)}`;
+          await addTrack(tr[i], true);
+        }
+        $('importOverlay').classList.add('hidden');
+        document.querySelector('#importOverlay .io-title').textContent = 'Importing music…';
+        closeSheet('pickSheet'); render(); toast('Added ' + tr.length + ' tracks');
+      };
+      $('arcStreamAll').onclick = async () => {
+        for (const t of tr) await addTrack(t, false);
+        closeSheet('pickSheet'); render(); toast(`Added ${tr.length} streams — download later from each track's ⋯ menu`);
+      };
+      $('arcBack').onclick = () => openSearch(backQuery);
+    } catch (e) {
+      $('pkList').innerHTML = `<div class="empty"><b>Could not read that recording</b>${esc(e.message || e)}</div>`;
+    }
+  }
+  return { openSearch, search, tracksOf, addTrack };
+})();
+window.ARCH = ARCH;
+
+/* everything is defined by here — start the updater last */
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(() => UPD.init(), 300));
+else setTimeout(() => UPD.init(), 300);
 
 </script>
 </body>
