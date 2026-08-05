@@ -419,6 +419,25 @@ html[data-theme="light"] .vid-badge{background:#e2ecfb;color:#1d5b9e}
   background:var(--card);transition:height .18s}
 #pullBar.on{border-bottom:1px solid var(--line)}
 
+/* ── find on this screen ── */
+#findBar{position:sticky;top:0;z-index:33;display:flex;align-items:center;gap:6px;
+  padding:calc(var(--safe-t) + 8px) 8px 8px;background:var(--glass);backdrop-filter:blur(14px);
+  border-bottom:1px solid var(--line)}
+#findBar input{flex:1;min-width:0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:11px 13px;outline:none}
+.find-count{font-size:12.5px;color:var(--mut);font-variant-numeric:tabular-nums;white-space:nowrap}
+#findViews{display:flex;gap:8px;overflow-x:auto;padding:8px 12px;background:var(--bg);border-bottom:1px solid var(--line);scrollbar-width:none}
+#findViews::-webkit-scrollbar{display:none}
+#findViews button{white-space:nowrap;background:var(--card);border:1px solid var(--line);border-radius:999px;padding:8px 13px;font-size:13px;color:var(--txt)}
+#findViews button.on{background:var(--grad);border-color:transparent;color:#fff;font-weight:700}
+mark.findhit{background:color-mix(in srgb,var(--a2) 45%,transparent);color:var(--txt);border-radius:3px;padding:0 1px}
+mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--a1)}
+
+/* ── settings jump index ── */
+.jumpbar{display:flex;gap:8px;overflow-x:auto;padding:2px 0 10px;scrollbar-width:none;margin:0 -16px;padding-left:16px;padding-right:16px}
+.jumpbar::-webkit-scrollbar{display:none}
+.jumpbar button{white-space:nowrap;background:var(--card);border:1px solid var(--line);border-radius:999px;padding:8px 13px;font-size:13px;color:var(--mut)}
+.jumpbar button:active{background:var(--card2)}
+
 </style>
 </head>
 <body>
@@ -429,6 +448,9 @@ html[data-theme="light"] .vid-badge{background:#e2ecfb;color:#1d5b9e}
   <header id="topbar">
     <div class="tb-title" id="tbTitle">Library</div>
     <div class="tb-actions">
+      <button class="icon-btn" id="btnFind" aria-label="Find on this screen">
+        <svg viewBox="0 0 24 24"><path d="M4 6h10"/><path d="M4 11h7"/><path d="M4 16h5"/><circle cx="16.5" cy="14.5" r="4"/><path d="M22 20l-2.6-2.6"/></svg>
+      </button>
       <button class="icon-btn" id="btnSearch" aria-label="Search">
         <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.2-4.2"/></svg>
       </button>
@@ -443,6 +465,15 @@ html[data-theme="light"] .vid-badge{background:#e2ecfb;color:#1d5b9e}
     <button class="chip on" id="updateApply">Update now</button>
     <button class="text-btn" id="updateLater">Later</button>
   </div>
+
+  <div id="findBar" class="hidden">
+    <input id="findInput" type="search" placeholder="Find on any screen — e.g. concerts, bpm, notify" autocomplete="off">
+    <span id="findCount" class="find-count"></span>
+    <button class="icon-btn" id="findPrev" aria-label="Previous match"><svg viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg></button>
+    <button class="icon-btn" id="findNext" aria-label="Next match"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+    <button class="text-btn" id="findClose">Done</button>
+  </div>
+  <div id="findViews" class="hidden"></div>
 
   <div id="searchBar" class="hidden">
     <input id="searchInput" type="search" placeholder="Search songs, artists, albums, genres…" autocomplete="off">
@@ -567,6 +598,7 @@ html[data-theme="light"] .vid-badge{background:#e2ecfb;color:#1d5b9e}
     <!-- Settings -->
     <section class="view hidden" id="view-settings">
       <div class="pad" id="settingsBody">
+        <nav class="jumpbar" id="jumpBar"></nav>
         <h3 class="section-h">Library</h3>
         <div class="row-btns">
           <button class="primary" id="btnImport2">Import audio files</button>
@@ -840,7 +872,7 @@ html[data-theme="light"] .vid-badge{background:#e2ecfb;color:#1d5b9e}
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '7.3.0';
+const APP_VERSION = '7.4.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -1920,6 +1952,7 @@ async function renderSettings() {
   if (window.FX) FX.renderMixer();
   if (window.OPS) OPS.renderConn();
   if (window.UPD) UPD.renderPanel();
+  if (window.FIND) setTimeout(() => FIND.initJumpBar(), 60);
   const bytes = T.list().reduce((n, t) => n + (t.size || 0), 0);
   let quota = '';
   try {
@@ -5510,7 +5543,23 @@ const UPD = (() => {
       }
       renderPanel();
     } catch (e) {
-      if (manual) toast('Update check failed: ' + (e.message || e));
+      /* GitHub's API unreachable (offline, rate-limited, blocked)? Fall back to
+         asking the service worker, which can spot a new build on its own. */
+      try {
+        const reg = await navigator.serviceWorker.getRegistration();
+        if (reg) {
+          await reg.update();
+          await new Promise((r) => setTimeout(r, 1500));
+          if (reg.waiting) {
+            showBar({ message: 'A newer build is ready to install', sha: '' });
+            if (manual) toast('Update found');
+            return;
+          }
+        }
+        if (manual) toast('Could not reach GitHub — and no newer build cached');
+      } catch (e2) {
+        if (manual) toast('Update check failed: ' + (e.message || e));
+      }
     } finally { busy = false; }
   }
 
@@ -5805,9 +5854,182 @@ const ARCH = (() => {
 })();
 window.ARCH = ARCH;
 
+/* ============================================================
+   Pulse FIND — search the words on any screen and jump to them
+   ============================================================ */
+const FIND = (() => {
+  const VIEWS = [
+    ['library', 'Library'], ['playlists', 'Playlists'], ['gym', 'Gym'],
+    ['stats', 'Stats'], ['settings', 'Settings']
+  ];
+  let q = '', hits = [], idx = -1, counts = {};
+
+  function clear(root) {
+    els('mark.findhit', root || document).forEach((m) => {
+      const t = document.createTextNode(m.textContent);
+      m.parentNode.replaceChild(t, m);
+    });
+    document.querySelectorAll('#main').forEach((n) => n.normalize());
+  }
+
+  /* count exactly what we can highlight, so the tally never promises a match
+     that cannot be jumped to (dropdown options, canvases and so on) */
+  const SKIP = ['SCRIPT', 'STYLE', 'CANVAS', 'OPTION', 'SELECT', 'DATALIST'];
+  function textNodes(root, needle) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+        let p = node.parentNode;
+        while (p && p !== root) { if (SKIP.includes(p.nodeName)) return NodeFilter.FILTER_REJECT; p = p.parentNode; }
+        return node.nodeValue.toLowerCase().includes(needle) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+      }
+    });
+    const out = [];
+    let n;
+    while ((n = walker.nextNode())) out.push(n);
+    return out;
+  }
+  function countIn(root, needle) {
+    let total = 0;
+    for (const node of textNodes(root, needle)) {
+      const t = node.nodeValue.toLowerCase();
+      let i = 0;
+      while ((i = t.indexOf(needle, i)) !== -1) { total++; i += needle.length; }
+    }
+    return total;
+  }
+  function countAll(needle) {
+    const out = {};
+    for (const [v] of VIEWS) {
+      const el2 = $('view-' + v);
+      out[v] = el2 ? countIn(el2, needle) : 0;
+    }
+    return out;
+  }
+
+  function highlight(view, needle) {
+    const root = $('view-' + view);
+    if (!root) return [];
+    clear(root);
+    const targets = textNodes(root, needle);
+    const marks = [];
+    for (const node of targets) {
+      const esc2 = needle.replace(/[.*+?^${}()|[\]\\]/g, (c) => '\\' + c);
+      const parts = node.nodeValue.split(new RegExp('(' + esc2 + ')', 'ig'));
+      const frag = document.createDocumentFragment();
+      parts.forEach((part) => {
+        if (part.toLowerCase() === needle) {
+          const m = document.createElement('mark');
+          m.className = 'findhit';
+          m.textContent = part;
+          frag.appendChild(m);
+          marks.push(m);
+        } else if (part) frag.appendChild(document.createTextNode(part));
+      });
+      node.parentNode.replaceChild(frag, node);
+    }
+    return marks;
+  }
+
+  function paintViewChips() {
+    const bar = $('findViews');
+    const withHits = VIEWS.filter(([v]) => counts[v] > 0);
+    if (!q || !withHits.length) { bar.classList.add('hidden'); bar.innerHTML = ''; return; }
+    bar.classList.remove('hidden');
+    bar.innerHTML = withHits.map(([v, label]) =>
+      `<button data-findview="${v}" class="${S.view === v ? 'on' : ''}">${label} (${counts[v]})</button>`).join('');
+    els('[data-findview]', bar).forEach((b) => b.onclick = () => go(b.dataset.findview));
+  }
+
+  function go(view) {
+    if (S.view !== view) setView(view);
+    setTimeout(() => { hits = highlight(view, q); idx = -1; step(1); paintViewChips(); paintCount(); }, 60);
+  }
+  function paintCount() {
+    const total = Object.values(counts).reduce((a, b) => a + b, 0);
+    if (!q) { $('findCount').textContent = ''; return; }
+    if (!total) { $('findCount').textContent = 'none'; return; }
+    const here = hits.length;
+    $('findCount').textContent = here
+      ? `${idx + 1}/${here}` + (total > here ? ` · ${total} total` : '')
+      : `${total} on other screens`;
+  }
+  function step(dir) {
+    if (!hits.length) return;
+    els('mark.findhit.current').forEach((m) => m.classList.remove('current'));
+    idx = (idx + dir + hits.length) % hits.length;
+    const m = hits[idx];
+    m.classList.add('current');
+    m.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    paintCount();
+  }
+
+  function run(text) {
+    q = (text || '').trim().toLowerCase();
+    clear();
+    hits = []; idx = -1;
+    if (q.length < 2) { counts = {}; paintViewChips(); paintCount(); return; }
+    /* make sure the dynamic screens have content before counting */
+    ['settings', 'stats', 'playlists', 'gym'].forEach((v) => {
+      if (S.view !== v) {
+        try {
+          if (v === 'settings') { renderSettings(); }
+          else if (v === 'stats') renderStats();
+          else if (v === 'playlists') renderPlaylists();
+          else if (v === 'gym') renderGymExtras();
+        } catch (e) {}
+      }
+    });
+    counts = countAll(q);
+    const best = counts[S.view] ? S.view : (VIEWS.find(([v]) => counts[v] > 0) || [])[0];
+    paintViewChips();
+    if (best) go(best); else paintCount();
+  }
+
+  function open() {
+    $('findBar').classList.remove('hidden');
+    $('topbar').classList.add('hidden');
+    $('findInput').value = '';
+    $('findInput').focus();
+    paintCount();
+  }
+  function close() {
+    $('findBar').classList.add('hidden');
+    $('findViews').classList.add('hidden');
+    $('topbar').classList.remove('hidden');
+    clear();
+    q = ''; hits = []; idx = -1; counts = {};
+  }
+
+  function initJumpBar() {
+    const bar = $('jumpBar');
+    if (!bar) return;
+    const secs = els('#settingsBody h3.section-h').map((h) => h.textContent.trim());
+    bar.innerHTML = secs.map((t, i) => `<button data-jump="${i}">${esc(t)}</button>`).join('');
+    els('[data-jump]', bar).forEach((b) => b.onclick = () => {
+      const h = els('#settingsBody h3.section-h')[+b.dataset.jump];
+      if (h) h.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    });
+  }
+
+  function init() {
+    $('btnFind').onclick = () => open();
+    $('findClose').onclick = () => close();
+    $('findNext').onclick = () => step(1);
+    $('findPrev').onclick = () => step(-1);
+    let t;
+    $('findInput').oninput = (e) => { clearTimeout(t); const v = e.target.value; t = setTimeout(() => run(v), 220); };
+    $('findInput').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); step(e.shiftKey ? -1 : 1); } };
+  }
+  return { init, run, open, close, step, initJumpBar, get counts() { return counts; }, get hits() { return hits; } };
+})();
+window.FIND = FIND;
+
 /* everything is defined by here — start the updater last */
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(() => UPD.init(), 300));
 else setTimeout(() => UPD.init(), 300);
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => FIND.init());
+else FIND.init();
 
 </script>
 </body>
