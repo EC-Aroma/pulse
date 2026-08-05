@@ -575,6 +575,7 @@ html[data-theme="light"] .vid-badge{background:#e2ecfb;color:#1d5b9e}
           <button class="ghost" id="btnDiagnose">Diagnose a video file</button>
         </div>
         <p class="hint" id="videoHint">Pick a video file (mp4, mov, webm…) and Pulse keeps just the soundtrack, re-compressed small. Nothing is uploaded — the conversion happens on your phone.<br><br>
+        <b>From a YouTube link:</b> paste one and Pulse offers the routes that actually work — Studio download for your own uploads, background listening in Firefox, or finding an audio version.<br><br>
         <b>From a link:</b> paste a direct media link and Pulse fetches it — audio links stream and can be saved offline, video links are downloaded and reduced to audio automatically. <b>From another app:</b> once installed, Pulse appears in Android's share sheet, so you can share a downloaded file or a media link into it directly.</p>
         <div id="storageInfo" class="card muted"></div>
         <button class="ghost wide" id="btnPersist">Ask Android to never evict my library</button>
@@ -830,7 +831,7 @@ html[data-theme="light"] .vid-badge{background:#e2ecfb;color:#1d5b9e}
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '7.1.0';
+const APP_VERSION = '7.2.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -4262,13 +4263,45 @@ ${JSON.stringify(r, null, 2)}`;
   const VIDEO_URL_RE = /\.(mp4|m4v|mov|webm|mkv|avi|3gp|ts)(\?|$)/i;
   const BLOCKED_HOSTS = /(^|\.)(youtube\.com|youtu\.be|m\.youtube\.com|music\.youtube\.com)$/i;
 
+  function ytHelp(url) {
+    /* A YouTube page link cannot be turned into audio inside a browser: the page
+       hands out signed, expiring streams that no web app is allowed to read.
+       So instead of a dead end, offer the routes that do work.               */
+    const inFirefox = 'intent://' + url.replace(/^https?:\/\//, '') +
+      '#Intent;scheme=https;package=org.mozilla.firefox;S.browser_fallback_url=' + encodeURIComponent(url) + ';end';
+    actionSheet('That is a YouTube page, not an audio file', [
+      {
+        label: 'It is my own upload — open YouTube Studio',
+        run: () => {
+          copyText(url);
+          window.open('https://studio.youtube.com/', '_blank');
+          setTimeout(() => alert('In Studio: Content → the ⋮ next to your video → Download.\n\nThen share that file into Pulse (share sheet → Pulse), or use Settings → "Video → audio only". You pick the bitrate; the picture is thrown away.'), 400);
+        }
+      },
+      {
+        label: 'Listen with the screen off — open in Firefox',
+        run: () => {
+          copyText(url);
+          try { location.href = inFirefox; } catch (e) { window.open(url, '_blank'); }
+          setTimeout(() => alert('Firefox for Android keeps audio playing when you lock the screen, with the ads intact, at no cost.\n\nIf Firefox did not open, install it once from the Play Store — the link is already copied, so just paste it in there.'), 900);
+        }
+      },
+      {
+        label: 'Look for an audio or podcast version',
+        run: () => { window.open('https://www.google.com/search?q=' + encodeURIComponent(url + ' podcast OR audio feed'), '_blank'); }
+      },
+      {
+        label: 'Why can Pulse not just take the audio?',
+        run: () => alert('Every YouTube-to-MP3 site runs a server that does the extraction and re-hosts the file. A web app on your phone cannot: the browser blocks it from reading YouTube\'s streams, and the stream URLs are signed and expire. Adding a server would mean paying for one and repairing it every time YouTube changes — the opposite of what you asked for.\n\nFor your own uploads, Studio\'s download button is the same audio with none of that.')
+      }
+    ]);
+  }
+  function copyText(t) { try { navigator.clipboard && navigator.clipboard.writeText(t); } catch (e) {} }
+
   function explainPageLink(url) {
     let host = '';
     try { host = new URL(url).hostname; } catch (e) {}
-    if (BLOCKED_HOSTS.test(host)) {
-      alert('That is a YouTube page link, not an audio file.\n\nPulse cannot pull audio out of YouTube — the page hands out signed, expiring video streams that a web app is not allowed to touch, and doing it would break YouTube\'s terms.\n\nFor your own uploads: YouTube Studio → Content → ⋮ → Download, then use "Video → audio only" (or just share the downloaded file straight into Pulse). That is free and official.');
-      return;
-    }
+    if (BLOCKED_HOSTS.test(host)) { ytHelp(url); return; }
     alert(`That link points at a web page, not at an audio or video file.\n\nPulse needs a direct file link — one ending in .mp3, .m4a, .mp4, .webm and so on. Podcast episode links usually look like that.\n\nIf ${host || 'the site'} has a download button, use it and then share the file into Pulse.`);
   }
 
@@ -4276,7 +4309,7 @@ ${JSON.stringify(r, null, 2)}`;
     const url = (prefill || prompt('Paste a direct media link (an .mp3, .m4a, .mp4, .webm … file, e.g. a podcast episode):', 'https://') || '').trim();
     if (!url) return;
     if (!/^https?:\/\//i.test(url)) { toast('That does not look like a link'); return; }
-    if (!MEDIA_RE.test(url)) { explainPageLink(url); return; }
+    if (!MEDIA_RE.test(url)) { explainPageLink(url); return; }   /* YouTube pages get the helper sheet */
     const isVideo = VIDEO_URL_RE.test(url);
     const guess = decodeURIComponent(url.split('?')[0].split('/').pop() || 'Audio link');
     const title = prompt('Title', guess.replace(/\.[a-z0-9]+$/i, '')) || guess;
@@ -4469,7 +4502,7 @@ ${JSON.stringify(r, null, 2)}`;
     handleShared();
   }
 
-  return { init, renderConn, checkUpdate, precache, reportProblem, addLink, saveOffline, fetchAndConvert, handleShared, showLog, conn, mayUseNetwork, pushError, get diag() { return diag; } };
+  return { init, renderConn, checkUpdate, precache, reportProblem, addLink, saveOffline, fetchAndConvert, handleShared, showLog, ytHelp, explainPageLink, conn, mayUseNetwork, pushError, get diag() { return diag; } };
 })();
 window.OPS = OPS;
 setTimeout(() => OPS.init(), 300);
