@@ -118,3 +118,5 @@ self.addEventListener('fetch', (e) => {
     })
   );
 });
+
+/* build 7.8.0-b */
