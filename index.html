@@ -469,6 +469,12 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
 .mini-prog{overflow:hidden;border-radius:0}
 .bar{border-radius:5px;background-clip:padding-box}
 
+/* ---- settings split into Sound / Look / App ---- */
+.setgroups{position:sticky;top:0;z-index:6;margin:0 -16px;padding:10px 16px 8px;
+  background:var(--bg);border-bottom:1px solid var(--line)}
+.setgroups button{flex:1;text-align:center;padding:10px 8px;font-size:15px}
+.setgroup>.section-h:first-child{margin-top:10px}
+
 </style>
 </head>
 <body>
@@ -629,77 +635,94 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
     <!-- Settings -->
     <section class="view hidden" id="view-settings">
       <div class="pad" id="settingsBody">
+        <nav class="segmented setgroups" id="setTabs">
+          <button data-setgroup="sound" class="on">Sound</button>
+          <button data-setgroup="look">Look</button>
+          <button data-setgroup="app">App</button>
+        </nav>
         <nav class="jumpbar" id="jumpBar"></nav>
-        <h3 class="section-h">Library</h3>
-        <div class="row-btns">
-          <button class="primary" id="btnImport2">Import audio files</button>
-          <button class="ghost" id="btnImportFolder">Import a folder</button>
-        </div>
-        <div class="row-btns">
-          <button class="ghost" id="btnImportVideoKeep">Import video (keep picture)</button>
-        </div>
-        <div class="row-btns">
-          <button class="ghost" id="btnImportVideo">Video → audio only</button>
-          <button class="ghost" id="btnAddLink">+ Add an audio link</button>
-          <button class="ghost" id="btnDiagnose">Diagnose a video file</button>
-          <button class="primary" id="btnArchive">Find free sets &amp; concerts</button>
-          <button class="primary" id="btnCloud">Cloud library (my GitHub folder)</button>
-        </div>
-        <p class="hint" id="videoHint">Pick a video file (mp4, mov, webm…) and Pulse keeps just the soundtrack, re-compressed small. Nothing is uploaded — the conversion happens on your phone.<br><br>
-        <b>From a YouTube link:</b> paste one and Pulse offers the routes that actually work — Studio download for your own uploads, background listening in Firefox, or finding an audio version.<br><br>
-        <b>From a link:</b> paste a direct media link and Pulse fetches it — audio links stream and can be saved offline, video links are downloaded and reduced to audio automatically. <b>From another app:</b> once installed, Pulse appears in Android's share sheet, so you can share a downloaded file or a media link into it directly.</p>
-        <div id="storageInfo" class="card muted"></div>
-        <button class="ghost wide" id="btnPersist">Ask Android to never evict my library</button>
 
-        <h3 class="section-h">Playback</h3>
-        <label class="slider-row">Crossfade <span id="xfVal">0s</span>
-          <input type="range" id="setXfade" min="0" max="12" step="1" value="0">
-        </label>
-        <label class="slider-row">Speed <span id="spVal">1.0×</span>
-          <input type="range" id="setSpeed" min="0.5" max="2" step="0.05" value="1">
-        </label>
-        <label class="switch"><input type="checkbox" id="setGapless" checked><span>Gapless / preload next track</span></label>
-        <label class="switch"><input type="checkbox" id="setResume" checked><span>Remember position on reopen</span></label>
-        <label class="slider-row">Sleep timer
-          <select id="setSleep">
-            <option value="0">off</option><option value="15">15 min</option><option value="30">30 min</option>
-            <option value="45">45 min</option><option value="60">60 min</option><option value="end">end of track</option>
-          </select>
-        </label>
-
-        <h3 class="section-h">App updates</h3>
-        <div id="updBody"></div>
-
-        <h3 class="section-h">Connection</h3>
-        <div id="connInfo" class="card muted"></div>
-        <label class="switch"><input type="checkbox" id="setWifiOnly" checked><span>Only check for updates on Wi-Fi</span></label>
-        <label class="switch"><input type="checkbox" id="setNoData"><span>Never use mobile data at all (airplane-safe mode)</span></label>
-        <div class="row-btns">
-          <button class="ghost" id="btnPrecache">Re-download app files for offline</button>
+        <!-- ── SOUND ─────────────────────────────────────────── -->
+        <div class="setgroup" id="setSound">
+          <h3 class="section-h">Playback</h3>
+          <label class="slider-row">Crossfade <span id="xfVal">0s</span>
+            <input type="range" id="setXfade" min="0" max="12" step="1" value="0">
+          </label>
+          <label class="slider-row">Speed <span id="spVal">1.0&times;</span>
+            <input type="range" id="setSpeed" min="0.5" max="2" step="0.05" value="1">
+          </label>
+          <label class="switch"><input type="checkbox" id="setGapless" checked><span>Gapless / preload next track</span></label>
+          <label class="switch"><input type="checkbox" id="setResume" checked><span>Remember position on reopen</span></label>
+          <label class="slider-row">Sleep timer
+            <select id="setSleep">
+              <option value="0">off</option><option value="15">15 min</option><option value="30">30 min</option>
+              <option value="45">45 min</option><option value="60">60 min</option><option value="end">end of track</option>
+            </select>
+          </label>
+          <div id="mixerBody"></div>
         </div>
 
-        <h3 class="section-h">Problems &amp; diagnostics</h3>
-        <div id="diagInfo" class="card muted"></div>
-        <div class="row-btns">
-          <button class="primary" id="btnReport">Report a problem</button>
-          <button class="ghost" id="btnDiagLog">Show recent errors</button>
+        <!-- ── LOOK ──────────────────────────────────────────── -->
+        <div class="setgroup hidden" id="setLook">
+          <h3 class="section-h">Appearance</h3>
+          <div id="themeBody"></div>
+          <div id="mixerLook"></div>
         </div>
 
-        <h3 class="section-h">Appearance</h3>
-        <div id="themeBody"></div>
+        <!-- ── APP ───────────────────────────────────────────── -->
+        <div class="setgroup hidden" id="setApp">
+          <h3 class="section-h">Library</h3>
+          <div class="row-btns">
+            <button class="primary" id="btnImport2">Import audio files</button>
+            <button class="ghost" id="btnImportFolder">Import a folder</button>
+          </div>
+          <div class="row-btns">
+            <button class="ghost" id="btnImportVideoKeep">Import video (keep picture)</button>
+          </div>
+          <div class="row-btns">
+            <button class="ghost" id="btnImportVideo">Video &rarr; audio only</button>
+            <button class="ghost" id="btnAddLink">+ Add an audio link</button>
+            <button class="ghost" id="btnDiagnose">Diagnose a video file</button>
+            <button class="primary" id="btnArchive">Find free sets &amp; concerts</button>
+            <button class="primary" id="btnCloud">Cloud library (my GitHub folder)</button>
+          </div>
+          <p class="hint" id="videoHint">Pick a video file (mp4, mov, webm&hellip;) and Pulse keeps just the soundtrack, re-compressed small. Nothing is uploaded &mdash; the conversion happens on your phone.<br><br>
+          <b>From a YouTube link:</b> paste one and Pulse offers the routes that actually work &mdash; Studio download for your own uploads, background listening in Firefox, or finding an audio version.<br><br>
+          <b>From a link:</b> paste a direct media link and Pulse fetches it &mdash; audio links stream and can be saved offline, video links are downloaded and reduced to audio automatically. <b>From another app:</b> once installed, Pulse appears in Android's share sheet, so you can share a downloaded file or a media link into it directly.</p>
+          <div id="storageInfo" class="card muted"></div>
+          <button class="ghost wide" id="btnPersist">Ask Android to never evict my library</button>
 
-        <h3 class="section-h">Sound, visualizer &amp; extras</h3>
-        <div id="mixerBody"></div>
+          <div id="mixerApp"></div>
 
-        <h3 class="section-h">Backup</h3>
-        <p class="hint">Your audio never leaves the phone. This exports/imports just the tags, favorites, playlists, ratings and stats, so you can rebuild your library on another device.</p>
-        <div class="row-btns">
-          <button class="ghost" id="btnExport">Export library data</button>
-          <button class="ghost" id="btnImportData">Import library data</button>
+          <h3 class="section-h">App updates</h3>
+          <div id="updBody"></div>
+
+          <h3 class="section-h">Connection</h3>
+          <div id="connInfo" class="card muted"></div>
+          <label class="switch"><input type="checkbox" id="setWifiOnly" checked><span>Only check for updates on Wi-Fi</span></label>
+          <label class="switch"><input type="checkbox" id="setNoData"><span>Never use mobile data at all (airplane-safe mode)</span></label>
+          <div class="row-btns">
+            <button class="ghost" id="btnPrecache">Re-download app files for offline</button>
+          </div>
+
+          <h3 class="section-h">Problems &amp; diagnostics</h3>
+          <div id="diagInfo" class="card muted"></div>
+          <div class="row-btns">
+            <button class="primary" id="btnReport">Report a problem</button>
+            <button class="ghost" id="btnDiagLog">Show recent errors</button>
+          </div>
+
+          <h3 class="section-h">Backup</h3>
+          <p class="hint">Your audio never leaves the phone. This exports/imports just the tags, favorites, playlists, ratings and stats, so you can rebuild your library on another device.</p>
+          <div class="row-btns">
+            <button class="ghost" id="btnExport">Export library data</button>
+            <button class="ghost" id="btnImportData">Import library data</button>
+          </div>
+
+          <h3 class="section-h">Danger zone</h3>
+          <button class="danger wide" id="btnWipe">Delete everything</button>
+          <p class="hint" id="verInfo"></p>
         </div>
-        <h3 class="section-h">Danger zone</h3>
-        <button class="danger wide" id="btnWipe">Delete everything</button>
-        <p class="hint" id="verInfo"></p>
       </div>
     </section>
   </main>
@@ -735,6 +758,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
       <div class="np-top">
         <button class="icon-btn" id="npClose" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
         <div class="np-src" id="npSource">Now playing</div>
+        <button class="icon-btn" id="npSound" aria-label="Sound settings"><svg viewBox="0 0 24 24"><path d="M5 8h14"/><path d="M5 16h14"/><circle cx="9" cy="8" r="2.2"/><circle cx="15" cy="16" r="2.2"/></svg></button>
         <button class="icon-btn" id="npQueueBtn" aria-label="Queue"><svg viewBox="0 0 24 24"><path d="M4 7h12"/><path d="M4 12h12"/><path d="M4 17h8"/><path d="M18 12v7l3-1.5"/></svg></button>
       </div>
 
@@ -904,7 +928,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '7.9.0';
+const APP_VERSION = '8.0.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -1750,6 +1774,14 @@ function smartLists() {
 /* ============================================================
    7. Rendering
    ============================================================ */
+/* jump to one group of Settings from wherever you are */
+function openSettingsGroup(group) {
+  closeSheet('np');
+  if (window.VIZFULL && VIZFULL.isOpen()) VIZFULL.hide();
+  setView('settings');
+  setTimeout(() => { if (window.SETTABS) SETTABS.show(group); }, 30);
+}
+
 function setView(v) {
   S.view = v;
   els('#tabbar button').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
@@ -2706,6 +2738,8 @@ function wire() {
     ]);
   };
   $('npQueueBtn').onclick = () => { renderQueue(); openSheet('queueSheet'); };
+  /* straight to the sound controls without hunting through Settings */
+  $('npSound').onclick = () => openSettingsGroup('sound');
   $('qClose').onclick = () => closeSheet('queueSheet');
   $('qClear').onclick = () => { P.queue = P.queue.slice(P.qi, P.qi + 1); P.qi = 0; renderQueue(); };
 
@@ -4173,6 +4207,27 @@ const FX = (() => {
     $('btnCad').onclick = async () => { await toggleCadence(!CAD.on); renderMixer(); };
     registerCanvas($('vizPreview'));
     paintSensors();
+    splitMixer();
+  }
+
+  /* The mixer is authored as one long list so every control keeps its id and
+     its wiring. Once it is built and wired, the blocks are dealt out to the
+     Sound / Look / App tabs — moving a node keeps its handlers. */
+  const LOOK_SECTIONS = ['Visualizer', 'Look — one-tap presets', 'Track name on the full-screen view', 'Full-screen visualizer'];
+  const APP_SECTIONS = ['Video → audio quality'];
+  function splitMixer() {
+    const src = $('mixerBody'), look = $('mixerLook'), app = $('mixerApp');
+    if (!src || !look || !app) return;
+    look.innerHTML = ''; app.innerHTML = '';
+    let target = null;
+    [...src.childNodes].forEach((node) => {
+      if (node.nodeType === 1 && node.matches('h3.section-h')) {
+        const t = node.textContent.trim();
+        target = LOOK_SECTIONS.includes(t) ? look : APP_SECTIONS.includes(t) ? app : null;
+      }
+      if (target) target.appendChild(node);
+    });
+    if (window.FIND) FIND.initJumpBar();
   }
 
   /* ============================================================
@@ -4251,7 +4306,7 @@ const FX = (() => {
   return {
     init, build, apply, mix, onTrackLoad, onPlayState, setTrackGain,
     analyseTrack, analyseLibrary, artworkSheet, batchArtwork, searchOnline, applyCandidate,
-    say, cue, connectHR, hrSummary, toggleCadence, cadenceQueue, renderMixer, registerCanvas, style, applyTextStyle, STYLE_PRESETS, selfTest, reconnect, vizBlocker,
+    say, cue, connectHR, hrSummary, toggleCadence, cadenceQueue, renderMixer, registerCanvas, style, applyTextStyle, STYLE_PRESETS, selfTest, reconnect, vizBlocker, splitMixer,
     get hr() { return HR; }, get cad() { return CAD; },
     stopAnalysis() { analysisAbort = true; },
     PRESETS, BANDS
@@ -5628,7 +5683,24 @@ const VIZFULL = (() => {
   function init() {
     $('vfClose').onclick = (e) => { e.stopPropagation(); hide(); };
     $('vizFull').onclick = () => hide();
-    $('vizNp').onclick = () => { if (allowed()) show(); };
+    $('vizNp').onclick = () => { if (!longPressed) { if (allowed()) show(); } };
+    /* press and hold any visualizer to jump straight to its Look settings */
+    let holdT = null, longPressed = false;
+    const holdOn = (c) => {
+      if (!c) return;
+      c.addEventListener('pointerdown', () => {
+        longPressed = false;
+        clearTimeout(holdT);
+        holdT = setTimeout(() => {
+          longPressed = true;
+          try { navigator.vibrate && navigator.vibrate(18); } catch (e) {}
+          openSettingsGroup('look');
+        }, 550);
+      }, { passive: true });
+      ['pointerup', 'pointercancel', 'pointerleave'].forEach((ev) =>
+        c.addEventListener(ev, () => clearTimeout(holdT), { passive: true }));
+    };
+    holdOn($('vizNp')); holdOn($('vizBig')); holdOn($('vizHud'));
     ['pointerdown', 'keydown'].forEach((ev) => document.addEventListener(ev, () => { if (!open) resetIdle(); }, { passive: true }));
     document.addEventListener('visibilitychange', () => {
       if (open && (document.hidden || document.visibilityState === 'hidden')) hide();
@@ -6035,6 +6107,44 @@ window.ARCH = ARCH;
 /* ============================================================
    Pulse FIND — search the words on any screen and jump to them
    ============================================================ */
+/* ============================================================
+   Settings groups — Sound / Look / App
+   ============================================================ */
+const SETTABS = (() => {
+  const GROUPS = [['sound', 'setSound'], ['look', 'setLook'], ['app', 'setApp']];
+  let cur = 'sound';
+
+  function show(g, opts) {
+    if (!GROUPS.some(([k]) => k === g)) g = 'sound';
+    cur = g;
+    GROUPS.forEach(([k, id]) => { const el2 = $(id); if (el2) el2.classList.toggle('hidden', k !== g); });
+    els('[data-setgroup]').forEach((b) => b.classList.toggle('on', b.dataset.setgroup === g));
+    try { localStorage.setItem('pulse-setgroup', g); } catch (e) {}
+    if (window.FIND) FIND.initJumpBar();
+    if (!opts || !opts.keepScroll) { const b = $('settingsBody'); if (b) b.scrollTop = 0; }
+  }
+
+  /* which group is this node sitting in? used by find-on-screen */
+  function groupOf(node) {
+    for (const [k, id] of GROUPS) { const el2 = $(id); if (el2 && el2.contains(node)) return k; }
+    return null;
+  }
+  function reveal(node) {
+    const g = groupOf(node);
+    if (g && g !== cur) { show(g, { keepScroll: true }); return true; }
+    return false;
+  }
+
+  function init() {
+    els('[data-setgroup]').forEach((b) => b.onclick = () => show(b.dataset.setgroup));
+    let saved = 'sound';
+    try { saved = localStorage.getItem('pulse-setgroup') || 'sound'; } catch (e) {}
+    show(saved);
+  }
+  return { init, show, reveal, groupOf, get current() { return cur; } };
+})();
+window.SETTABS = SETTABS;
+
 const FIND = (() => {
   const VIEWS = [
     ['library', 'Library'], ['playlists', 'Playlists'], ['gym', 'Gym'],
@@ -6138,7 +6248,9 @@ const FIND = (() => {
     idx = (idx + dir + hits.length) % hits.length;
     const m = hits[idx];
     m.classList.add('current');
-    m.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    /* a match can live on a settings tab that is not showing — open it first */
+    const switched = window.SETTABS && S.view === 'settings' ? SETTABS.reveal(m) : false;
+    setTimeout(() => m.scrollIntoView({ block: 'center', behavior: 'smooth' }), switched ? 80 : 0);
     paintCount();
   }
 
@@ -6179,13 +6291,18 @@ const FIND = (() => {
     q = ''; hits = []; idx = -1; counts = {};
   }
 
+  const openGroup = () => {
+    const g = window.SETTABS ? SETTABS.current : 'sound';
+    return '#set' + g.charAt(0).toUpperCase() + g.slice(1);
+  };
   function initJumpBar() {
     const bar = $('jumpBar');
     if (!bar) return;
-    const secs = els('#settingsBody h3.section-h').map((h) => h.textContent.trim());
+    const sel = openGroup() + ' h3.section-h';
+    const secs = els(sel).map((h) => h.textContent.trim());
     bar.innerHTML = secs.map((t, i) => `<button data-jump="${i}">${esc(t)}</button>`).join('');
     els('[data-jump]', bar).forEach((b) => b.onclick = () => {
-      const h = els('#settingsBody h3.section-h')[+b.dataset.jump];
+      const h = els(sel)[+b.dataset.jump];
       if (h) h.scrollIntoView({ block: 'start', behavior: 'smooth' });
     });
   }
@@ -6206,8 +6323,8 @@ window.FIND = FIND;
 /* everything is defined by here — start the updater last */
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(() => UPD.init(), 300));
 else setTimeout(() => UPD.init(), 300);
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => FIND.init());
-else FIND.init();
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => { FIND.init(); SETTABS.init(); });
+else { FIND.init(); SETTABS.init(); }
 
 /* ============================================================
    Pulse CLOUD — a music folder in your own GitHub repo, read
