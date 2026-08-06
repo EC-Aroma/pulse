@@ -904,7 +904,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '7.8.0';
+const APP_VERSION = '7.9.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -3019,7 +3019,10 @@ const FX = (() => {
         N.analyser.connect(AC.destination);
         built = true;
       }
-      ['a', 'b', 'v'].forEach((k) => {
+      /* 's' is the plain-stream fallback element: without it, link/stream
+         playback reaches the speaker but never the analyser, so the bars
+         sit flat at zero. */
+      ['a', 'b', 'v', 's'].forEach((k) => {
         if (!P[k]) return;
         if (!srcNodes[k]) {
           try { srcNodes[k] = AC.createMediaElementSource(P[k]); srcNodes[k].connect(N.pre); } catch (e) {}
@@ -3079,15 +3082,32 @@ const FX = (() => {
   /* ============================================================
      2. Visualizer
      ============================================================ */
-  const V = { raf: null, canvases: [], freq: null, time: null, beat: 0, lastFlux: 0, prevSpec: null, energyHist: [] };
+  const V = { raf: null, canvases: [], freq: null, time: null, beat: 0, lastFlux: 0, prevSpec: null, energyHist: [], lastSignal: 0 };
 
-  function registerCanvas(c) { if (c && !V.canvases.includes(c)) V.canvases.push(c); }
+  function registerCanvas(c) {
+    if (!c || V.canvases.includes(c)) return;
+    V.canvases.push(c);
+    c.addEventListener('pointerdown', () => { if (vizBlocker() || !V.lastSignal) reconnect(); }, { passive: true });
+  }
+
+  /* why the bars are not drawing, in plain words — '' means they are */
+  function vizBlocker() {
+    const m = mix();
+    if (!m.fx) return 'Sound processing is off';
+    if (!built) return 'Audio engine not started — tap here';
+    const onScreen = (window.VIZFULL && VIZFULL.isOpen())
+      || $('np').classList.contains('open') || $('hud').classList.contains('open');
+    if (!onScreen) return 'hidden';
+    if (!(window.VIZFULL && VIZFULL.isOpen()) && m.viz === 'off') return 'Visualizer is set to Off';
+    return '';
+  }
 
   function vizActive() {
-    const m = mix();
-    if (!m.fx || !built || document.hidden) return false;
-    if (window.VIZFULL && VIZFULL.isOpen()) return true;      /* black-screen mode */
-    return m.viz !== 'off' && ($('np').classList.contains('open') || $('hud').classList.contains('open'));
+    /* document.hidden is deliberately NOT a blocker: on Android the page can
+       report hidden the moment the screen dims, which used to blank the
+       black-screen visualizer. requestAnimationFrame already stops on its
+       own when the page is genuinely not being composited. */
+    return vizBlocker() === '';
   }
 
   function startViz() { if (!V.raf) V.raf = requestAnimationFrame(drawViz); }
@@ -3095,7 +3115,11 @@ const FX = (() => {
 
   function drawViz() {
     V.raf = requestAnimationFrame(drawViz);
-    if (!vizActive()) { V.canvases.forEach(clearCanvas); return; }
+    const blocker = vizBlocker();
+    if (blocker) {
+      V.canvases.forEach((c) => { clearCanvas(c); if (blocker !== 'hidden') noteOnCanvas(c, blocker); });
+      return;
+    }
     const a = N.analyser;
     const bins = a.frequencyBinCount;
     if (!V.freq || V.freq.length !== bins) { V.freq = new Uint8Array(bins); V.prevSpec = new Float32Array(64); }
@@ -3130,8 +3154,47 @@ const FX = (() => {
     if (flux > avg * 1.55 && flux > 0.12) V.beat = 1;
     V.beat *= 0.88;
 
+    /* A flat analyser while audio is actually playing means the sound is not
+       running through the graph — say so instead of showing an empty box. */
+    let peak = 0;
+    for (let i = 0; i < BARS; i++) if (out[i] > peak) peak = out[i];
+    if (peak > 0.01) V.lastSignal = performance.now();
+    const el = P.el();
+    const dead = el && !el.paused && V.lastSignal && (performance.now() - V.lastSignal > 2500);
+    if (dead) {
+      V.canvases.forEach((c) => { clearCanvas(c); noteOnCanvas(c, 'No signal — tap to reconnect'); });
+      return;
+    }
+
     V.canvases.forEach((c) => paint(c, out, low));
     return;
+  }
+
+  /* one short line, centred, so a blank visualizer always explains itself */
+  function noteOnCanvas(c, msg) {
+    if (!fitCanvas(c)) return;
+    const ctx = c.getContext('2d');
+    const w = c.width, h = c.height;
+    const s = Math.max(11, Math.min(16, Math.round(h / 7)));
+    ctx.save();
+    ctx.font = `500 ${s}px system-ui, sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(255,255,255,.45)';
+    ctx.fillText(msg, w / 2, h / 2);
+    ctx.restore();
+  }
+
+  /* tapping any canvas re-runs the connection — covers a context that was
+     suspended or an element that never got wired up */
+  function reconnect() {
+    /* deliberately keeps the same AudioContext: an element can only ever be
+       captured once, so tearing the context down would silence it for good.
+       build() re-runs the wiring pass and picks up anything still loose. */
+    const ac = build();
+    if (ac && ac.state !== 'running') ac.resume().catch(() => {});
+    V.lastSignal = 0;
+    startViz();
+    return !!ac && Object.keys(srcNodes).length > 0;
   }
 
   function clearCanvas(c) {
@@ -4155,7 +4218,7 @@ const FX = (() => {
         : `canvas ${id}: missing`);
     });
     L.push(`now-playing open: ${$('np').classList.contains('open')} · gym HUD open: ${$('hud').classList.contains('open')} · full-screen open: ${window.VIZFULL ? VIZFULL.isOpen() : '?'}`);
-    L.push(`drawing right now: ${vizActive()}`);
+    L.push(`drawing right now: ${vizActive()}${vizBlocker() ? '  <-- blocked: ' + vizBlocker() : ''}`);
     L.push('', 'Where the bars are meant to appear:', '· on the now-playing screen, under the track name',
       '· on the gym HUD, under the buttons', '· full-screen when you tap the bars, or after the idle delay',
       '', `app v${APP_VERSION} · ${navigator.userAgent}`);
@@ -4166,10 +4229,11 @@ const FX = (() => {
 
   function onTrackLoad(track) {
     build();
+    V.lastSignal = 0;
     setTrackGain(track);
     startViz();
   }
-  function onPlayState() { keepAlive(); startViz(); }
+  function onPlayState() { build(); keepAlive(); startViz(); }
 
   function init() {
     mix();
@@ -4187,7 +4251,7 @@ const FX = (() => {
   return {
     init, build, apply, mix, onTrackLoad, onPlayState, setTrackGain,
     analyseTrack, analyseLibrary, artworkSheet, batchArtwork, searchOnline, applyCandidate,
-    say, cue, connectHR, hrSummary, toggleCadence, cadenceQueue, renderMixer, registerCanvas, style, applyTextStyle, STYLE_PRESETS, selfTest,
+    say, cue, connectHR, hrSummary, toggleCadence, cadenceQueue, renderMixer, registerCanvas, style, applyTextStyle, STYLE_PRESETS, selfTest, reconnect, vizBlocker,
     get hr() { return HR; }, get cad() { return CAD; },
     stopAnalysis() { analysisAbort = true; },
     PRESETS, BANDS
