@@ -242,7 +242,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 .eq-wrap{display:flex;gap:6px;justify-content:space-between;padding:10px 16px;height:0;overflow:hidden;transition:height .2s}
 .eq-wrap.on{height:190px}
 .eqband{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;font-size:10px;color:var(--mut)}
-.eqband input[type=range]{writing-mode:vertical-lr;direction:rtl;width:26px;height:140px}
+.eqband input[type=range]{width:100%;height:30px}
 .stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
 .stat{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px}
 .stat b{display:block;font-size:26px;font-weight:800;letter-spacing:-.02em}
@@ -291,9 +291,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 #hud .hud-main{transition:transform .08s linear}
 
 /* ── 10-band EQ ── */
-.eq10{display:flex;gap:2px;justify-content:space-between;padding:10px 12px 2px}
-.eq10 .eqband{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;font-size:9.5px;color:var(--mut)}
-.eq10 input[type=range]{writing-mode:vertical-lr;direction:rtl;width:22px;height:130px}
+.eq10{display:flex;flex-direction:column;gap:2px;padding:6px 16px 2px}
+.eqrow{display:flex;align-items:center;gap:10px}
+.eqrow input[type=range]{flex:1;min-width:0;height:30px}
+.eqhz{width:56px;flex:none;font-size:12px;color:var(--mut);font-variant-numeric:tabular-nums}
+.eqdb{width:56px;flex:none;text-align:right;font-size:12px;color:var(--txt);font-variant-numeric:tabular-nums}
 
 /* ── artwork candidates ── */
 .cand-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:10px 16px}
@@ -902,7 +904,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '7.6.0';
+const APP_VERSION = '7.8.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -2930,7 +2932,7 @@ const FX = (() => {
     speak: false, speakRate: 1.05, speakRounds: true, speakCountIn: true,
     hrOn: false, cadenceOn: false, startAtDrop: true,
     convKbps: 96, convChannels: 'auto',     // video → audio quality
-    vizFull: false, vizFullIdle: 0, vizFullWake: true, vizFullShape: 'bars', videoInFull: true
+    vizFull: true, vizFullIdle: 20, vizFullWake: true, vizFullShape: 'bars', videoInFull: true
   };
   const PRESETS = {
     Flat:        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -3909,9 +3911,12 @@ const FX = (() => {
       <label class="switch"><input type="checkbox" id="mAuto" ${m.autoGain ? 'checked' : ''}><span>Match volume between tracks (uses analysis)</span></label>
 
       <h3 class="section-h">10-band equalizer</h3>
-      <div class="eq10">${BANDS.map((f, i) => `<div class="eqband">
+      <div class="eq10">${BANDS.map((f, i) => `<label class="eqrow">
+        <span class="eqhz">${f >= 1000 ? (f / 1000) + ' kHz' : f + ' Hz'}</span>
         <input type="range" data-eq10="${i}" min="-12" max="12" step="1" value="${m.eq[i] || 0}">
-        <span>${f >= 1000 ? (f / 1000) + 'k' : f}</span></div>`).join('')}</div>
+        <span class="eqdb" data-eqdb="${i}">${(m.eq[i] || 0) > 0 ? '+' : ''}${m.eq[i] || 0} dB</span>
+      </label>`).join('')}</div>
+      <div class="row-btns"><button class="ghost" id="eqFlat">Reset all bands to flat</button></div>
       <div class="row-btns">${Object.keys(PRESETS).map((k) => `<button class="chip" data-p10="${esc(k)}">${esc(k)}</button>`).join('')}</div>
 
       <h3 class="section-h">Visualizer</h3>
@@ -3989,6 +3994,7 @@ const FX = (() => {
         </select></label>
       <label class="switch"><input type="checkbox" id="vfWake" ${m.vizFullWake ? 'checked' : ''}><span>Keep the screen on while it's showing</span></label>
       <label class="switch"><input type="checkbox" id="vfVideo" ${m.videoInFull !== false ? 'checked' : ''}><span>Play the clip full-screen when a track has video</span></label>
+      <div class="row-btns"><button class="ghost" id="vfTest">Why is nothing showing?</button></div>
       <p class="hint">Tap the visualizer on the now-playing screen to go full-screen; tap anywhere to come back. It only runs while the screen is on — Android gives no app, web or native, a way to draw on a switched-off screen, so with the screen off you get the lock-screen controls and the music keeps playing.</p>
 
       <h3 class="section-h">Spoken cues</h3>
@@ -4052,10 +4058,22 @@ const FX = (() => {
       toast(m.fx ? 'Turning processing on — reloading' : 'Going direct — reloading');
       setTimeout(() => location.reload(), 900);
     };
-    els('[data-eq10]').forEach((r) => r.oninput = () => { m.eq[+r.dataset.eq10] = +r.value; apply(); save(); });
+    const paintDb = (i) => {
+      const n = document.querySelector(`[data-eqdb="${i}"]`);
+      if (n) n.textContent = (m.eq[i] > 0 ? '+' : '') + m.eq[i] + ' dB';
+    };
+    els('[data-eq10]').forEach((r) => r.oninput = () => {
+      m.eq[+r.dataset.eq10] = +r.value; paintDb(+r.dataset.eq10); apply(); save();
+    });
+    const flat = $('eqFlat');
+    if (flat) flat.onclick = () => {
+      m.eq = BANDS.map(() => 0); apply(); save();
+      els('[data-eq10]').forEach((r, i) => { r.value = 0; paintDb(i); });
+      toast('EQ flat');
+    };
     els('[data-p10]').forEach((b) => b.onclick = () => {
       m.eq = PRESETS[b.dataset.p10].slice(); apply(); save();
-      els('[data-eq10]').forEach((r, i) => r.value = m.eq[i]);
+      els('[data-eq10]').forEach((r, i) => { r.value = m.eq[i]; paintDb(i); });
       toast(b.dataset.p10 + ' EQ');
     });
     const stBind = (id, key, after) => { const n = $(id); if (n) n.onchange = () => { style()[key] = n.value; save(); applyTextStyle(); after && after(); }; };
@@ -4081,6 +4099,7 @@ const FX = (() => {
     const vf = $('vfOn'); if (vf) vf.onchange = (e) => { m.vizFull = e.target.checked; save(); VIZFULL.resetIdle(); toast(m.vizFull ? 'Tap the visualizer to go full-screen' : 'Full-screen visualizer off'); };
     const vi = $('vfIdle'); if (vi) vi.onchange = (e) => { m.vizFullIdle = +e.target.value; save(); VIZFULL.resetIdle(); };
     const vw = $('vfWake'); if (vw) vw.onchange = (e) => { m.vizFullWake = e.target.checked; save(); };
+    const vt = $('vfTest'); if (vt) vt.onclick = () => selfTest();
     const vv = $('vfVideo'); if (vv) vv.onchange = (e) => { m.videoInFull = e.target.checked; save(); };
     const vs = $('vfShape'); if (vs) vs.onchange = (e) => { m.vizFullShape = e.target.value; save(); const c = $('vizBig'); if (c) c.dataset.mode = e.target.value; };
     $('spTest').onclick = () => { const was = m.speak; m.speak = true; say('Round three of eight. Go.', { interrupt: true }); m.speak = was; };
@@ -4106,6 +4125,45 @@ const FX = (() => {
     if (st.textAlways) m.classList.remove('dim');
   }
 
+  async function selfTest() {
+    const m = mix(), st = style();
+    const L = [];
+    L.push('VISUALIZER SELF-TEST', '');
+    L.push(`sound processing (fx): ${m.fx ? 'ON' : 'OFF  <-- the visualizer cannot run with this off'}`);
+    L.push(`visualizer mode: ${m.viz}${m.viz === 'off' ? '  <-- set to Off' : ''}`);
+    L.push(`shape: ${st.shape} · palette: ${st.palette} · background: ${st.bg}`);
+    L.push(`full-screen allowed: ${m.vizFull} · auto after idle: ${m.vizFullIdle || 'never'} s · keep screen on: ${m.vizFullWake}`);
+    const ac = build();
+    L.push(`audio engine: ${ac ? ac.state : 'could not start'}`);
+    L.push(`graph built: ${built} · analyser: ${built && N.analyser ? 'yes' : 'no'}`);
+    L.push(`sources connected: ${Object.keys(srcNodes).join(', ') || 'none  <-- audio is not routed through the engine'}`);
+    L.push(`playing: ${!P.el().paused} on element "${P.cur}"${P.cur === 's' || P.cur === 'v' ? '  <-- this element bypasses the engine on purpose' : ''}`);
+    /* is the analyser actually seeing signal? */
+    let peak = 0;
+    if (built && N.analyser) {
+      const buf = new Uint8Array(N.analyser.frequencyBinCount);
+      for (let i = 0; i < 12; i++) {
+        N.analyser.getByteFrequencyData(buf);
+        for (const v of buf) if (v > peak) peak = v;
+        await new Promise((r) => setTimeout(r, 60));
+      }
+    }
+    L.push(`signal reaching the analyser: ${peak} of 255${peak === 0 ? '  <-- silence: nothing to draw' : ''}`);
+    ['vizNp', 'vizHud', 'vizBig', 'vizPreview'].forEach((id) => {
+      const c = $(id);
+      L.push(c ? `canvas ${id}: ${c.clientWidth}x${c.clientHeight} css, ${c.width}x${c.height} px${c.clientWidth ? '' : '  <-- zero size, cannot draw'}`
+        : `canvas ${id}: missing`);
+    });
+    L.push(`now-playing open: ${$('np').classList.contains('open')} · gym HUD open: ${$('hud').classList.contains('open')} · full-screen open: ${window.VIZFULL ? VIZFULL.isOpen() : '?'}`);
+    L.push(`drawing right now: ${vizActive()}`);
+    L.push('', 'Where the bars are meant to appear:', '· on the now-playing screen, under the track name',
+      '· on the gym HUD, under the buttons', '· full-screen when you tap the bars, or after the idle delay',
+      '', `app v${APP_VERSION} · ${navigator.userAgent}`);
+    const text = L.join('\n');
+    if (window.OPS) OPS.showLog(text);
+    return text;
+  }
+
   function onTrackLoad(track) {
     build();
     setTrackGain(track);
@@ -4129,7 +4187,7 @@ const FX = (() => {
   return {
     init, build, apply, mix, onTrackLoad, onPlayState, setTrackGain,
     analyseTrack, analyseLibrary, artworkSheet, batchArtwork, searchOnline, applyCandidate,
-    say, cue, connectHR, hrSummary, toggleCadence, cadenceQueue, renderMixer, registerCanvas, style, applyTextStyle, STYLE_PRESETS,
+    say, cue, connectHR, hrSummary, toggleCadence, cadenceQueue, renderMixer, registerCanvas, style, applyTextStyle, STYLE_PRESETS, selfTest,
     get hr() { return HR; }, get cad() { return CAD; },
     stopAnalysis() { analysisAbort = true; },
     PRESETS, BANDS
@@ -5498,6 +5556,10 @@ const VIZFULL = (() => {
     idleT = setTimeout(() => {
       if (!open && !P.el().paused && !document.hidden && !$('hud').classList.contains('open')) show();
     }, secs * 1000);
+    /* hold the screen a little early, otherwise Android can sleep first */
+    if (FX.mix().vizFullWake && !P.el().paused && !lock) {
+      try { if ('wakeLock' in navigator) navigator.wakeLock.request('screen').then((l) => { lock = l; }).catch(() => {}); } catch (e) {}
+    }
   }
   function init() {
     $('vfClose').onclick = (e) => { e.stopPropagation(); hide(); };
@@ -5536,6 +5598,10 @@ const UPD = (() => {
 
   async function fetchLatest() {
     const r = await fetch(API, { headers: { Accept: 'application/vnd.github+json' }, cache: 'no-store' });
+    if (r.status === 404 || r.status === 403) {
+      S.settings.repoPrivate = true; saveSettings();
+      throw new Error('private-repo');
+    }
     if (!r.ok) throw new Error('GitHub said ' + r.status);
     const d = await r.json();
     const c = Array.isArray(d) ? d[0] : null;
@@ -5552,6 +5618,7 @@ const UPD = (() => {
   async function check(manual) {
     if (busy) return;
     if (!OPS.mayUseNetwork(manual)) { if (manual) toast('No connection (or airplane-safe mode is on)'); return; }
+    if (S.settings.repoPrivate) return swOnlyCheck(manual);
     busy = true;
     if (manual) toast('Asking GitHub…');
     try {
@@ -5592,6 +5659,21 @@ const UPD = (() => {
         if (manual) toast('Update check failed: ' + (e.message || e));
       }
     } finally { busy = false; }
+  }
+
+  /* private repo: the app still spots new builds on its own, because the
+     service worker compares the files it fetches with the ones it cached */
+  async function swOnlyCheck(manual) {
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (!reg) { if (manual) toast('Offline cache not ready yet'); return; }
+      await reg.update();
+      await new Promise((r) => setTimeout(r, 1800));
+      S.settings.lastUpdateCheck = Date.now(); saveSettings();
+      if (reg.waiting) { showBar({ message: 'A newer build is ready to install', sha: '' }); if (manual) toast('Update found'); }
+      else if (manual) toast('You are on the newest build');
+      renderPanel();
+    } catch (e) { if (manual) toast('Update check failed'); }
   }
 
   function showBar(info) {
@@ -5703,6 +5785,7 @@ const UPD = (() => {
         Newest seen on GitHub: <b>${seen}</b>${latest && latest.message ? ` — ${esc(latest.message)}` : ''}<br>
         Last checked: ${S.settings.lastUpdateCheck ? new Date(S.settings.lastUpdateCheck).toLocaleString() : 'never'}<br>
         Background checks: <b>${esc(per)}</b>
+        ${S.settings.repoPrivate ? '<br>Repository is <b>private</b> — checking through the app\'s own cache rather than the GitHub API.' : ''}
       </div>
       <button class="primary wide" id="updNow">Check GitHub for an update</button>
       <div class="row-btns">
@@ -6116,8 +6199,12 @@ const CLOUD = (() => {
     let files = [];
     try { files = await listFolder(FOLDER); }
     catch (e) {
-      if (String(e.message) === 'no-folder') throw e;
-      try { files = await listManifest(); } catch (e2) { throw e; }
+      const m = String(e.message);
+      if (m === 'no-folder') throw e;
+      /* a private repo cannot be listed anonymously — fall back to a manifest
+         file that the site itself serves */
+      try { files = await listManifest(); }
+      catch (e2) { throw new Error(/40[34]/.test(m) || m === 'private-repo' ? 'private-no-manifest' : m); }
     }
     const have = new Set(T.list().map((t) => t.cloudPath).filter(Boolean));
     files.forEach((f) => { f.already = have.has(f.path); });
@@ -6231,6 +6318,14 @@ const CLOUD = (() => {
       });
     } catch (e) {
       const m = String(e.message || e);
+      if (m === 'private-no-manifest') {
+        $('pkList').innerHTML = `<div class="empty"><b>This repository is private</b>
+          GitHub will not list a private folder without a key, so Pulse cannot see what is in it.<br><br>
+          Two ways round it: add a file called <code>${FOLDER}/index.json</code> listing the file names
+          (e.g. <code>["mix1.mp3","sets/live.mp3"]</code>) and Pulse will read that instead — or import
+          straight from the phone with <b>Import a folder</b>, which needs no repository at all.</div>`;
+        return;
+      }
       $('pkList').innerHTML = m === 'no-folder'
         ? `<div class="empty"><b>No ${FOLDER}/ folder yet</b>
              Open your repo on github.com, tap <b>Add file → Create new file</b>, type
