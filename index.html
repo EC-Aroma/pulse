@@ -997,7 +997,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '9.2.0';
+const APP_VERSION = '9.3.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -5627,6 +5627,27 @@ const FX = (() => {
     if (st.textAlways) m.classList.remove('dim');
   }
 
+  /* count real animation frames — the only honest way to know if a phone is
+     keeping up with the visualizer */
+  function measureFps(ms) {
+    return new Promise((resolve) => {
+      let n = 0, worst = Infinity, last = performance.now();
+      const t0 = last;
+      const tick = () => {
+        const now = performance.now();
+        const gap = now - last;
+        if (n > 2 && gap > 0) worst = Math.min(worst, 1000 / gap);
+        last = now; n++;
+        if (now - t0 < ms) requestAnimationFrame(tick);
+        else {
+          const secs = (now - t0) / 1000;
+          resolve({ avg: Math.round(n / secs), min: worst === Infinity ? 0 : Math.round(worst), frames: n, seconds: secs.toFixed(1) });
+        }
+      };
+      requestAnimationFrame(tick);
+    });
+  }
+
   async function selfTest() {
     const m = mix(), st = style();
     const L = [];
@@ -5658,6 +5679,39 @@ const FX = (() => {
     });
     L.push(`now-playing open: ${$('np').classList.contains('open')} · gym HUD open: ${$('hud').classList.contains('open')} · full-screen open: ${window.VIZFULL ? VIZFULL.isOpen() : '?'}`);
     L.push(`drawing right now: ${vizActive()}${vizBlocker() ? '  <-- blocked: ' + vizBlocker() : ''}`);
+
+    /* --- speed --- */
+    L.push('', 'SPEED');
+    /* Measuring from the settings screen would time an idle app. Open the
+       full-screen view for the duration so the number is the one that
+       matters, then put everything back. */
+    const wasOpen = !!(window.VIZFULL && VIZFULL.isOpen());
+    let opened = false;
+    if (!wasOpen && window.VIZFULL && VIZFULL.allowed && VIZFULL.allowed()) {
+      try { VIZFULL.show(); opened = true; await new Promise((r) => setTimeout(r, 1600)); } catch (e) {}
+    }
+    const fps = await measureFps(3000);
+    /* read the renderer AFTER the scene has actually started */
+    const renderer = st.bg === 'fluid'
+      ? (window.FLUID && FLUID.ready ? 'GPU fluid simulation' : (window.FLUID && FLUID.supported() ? 'GPU fluid did not start' : 'GPU fluid unavailable — using the particle smoke'))
+      : st.bg === 'space'
+        ? (window.SPACEGL && SPACEGL.ready ? 'GPU space shader' : 'canvas space')
+        : st.bg === 'realsmoke' ? 'canvas particle smoke'
+        : st.bg === 'smoke' ? 'canvas pixelised clouds'
+        : st.bg === 'none' ? 'no background' : 'canvas ' + st.bg;
+    if (opened) { try { VIZFULL.hide(); } catch (e) {} }
+    L.push(`background: ${st.bg} · drawn by: ${renderer}`);
+    L.push(`quality: ${st.smokeDetail || 'fine'}${st.bg === 'fluid' && window.FLUID ? ` (grid ${FLUID.CFG.simRes}, dye ${FLUID.CFG.dyeRes}, ${FLUID.CFG.pressureIters} pressure passes)` : ''}`);
+    L.push(`fronts: ${st.smokeCount || 2} · movement speed: ${st.smokeSpeed === undefined ? 50 : st.smokeSpeed}/100`);
+    L.push(opened ? 'measured with the full-screen visualizer open (opened just for the test)'
+                  : wasOpen ? 'measured with the full-screen visualizer open'
+                  : 'measured on the current screen — open the full-screen visualizer for the real number');
+    L.push(`frame rate: ${fps.avg} fps (worst ${fps.min}) over ${fps.seconds}s, ${fps.frames} frames`);
+    L.push(fps.avg >= 50 ? '  → smooth' : fps.avg >= 30 ? '  → fine, but not buttery — try one quality step down'
+      : fps.avg >= 20 ? '  → choppy: drop the quality, or use a lighter background'
+      : '  → too slow to enjoy: switch the background to Pixelised clouds or Plain black');
+    L.push(`screen: ${Math.round(window.innerWidth)}x${Math.round(window.innerHeight)} css at ${window.devicePixelRatio || 1}x`);
+
     L.push('', 'Where the bars are meant to appear:', '· on the now-playing screen, under the track name',
       '· on the gym HUD, under the buttons', '· full-screen when you tap the bars, or after the idle delay',
       '', `app v${APP_VERSION} · ${navigator.userAgent}`);
