@@ -699,7 +699,8 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
             <button class="primary" id="btnCloud">Cloud library (my GitHub folder)</button>
           </div>
           <p class="hint" id="videoHint">Pick a video file (mp4, mov, webm&hellip;) and Pulse keeps just the soundtrack, re-compressed small. Nothing is uploaded &mdash; the conversion happens on your phone.<br><br>
-          <b>From a YouTube link:</b> paste one and Pulse offers the routes that actually work &mdash; Studio download for your own uploads, background listening in Firefox, or finding an audio version.<br><br>
+          <b>From TikTok, X or Instagram:</b> use that app's own <b>Save video</b> button to put the file on your phone, then share it into Pulse from the Android share sheet — Pulse keeps the soundtrack and drops the picture. Paste one of their links here and Pulse tells you exactly which button to press.<br><br>
+        <b>From a YouTube link:</b> paste one and Pulse offers the routes that actually work &mdash; Studio download for your own uploads, background listening in Firefox, or finding an audio version.<br><br>
           <b>From a link:</b> paste a direct media link and Pulse fetches it &mdash; audio links stream and can be saved offline, video links are downloaded and reduced to audio automatically. <b>From another app:</b> once installed, Pulse appears in Android's share sheet, so you can share a downloaded file or a media link into it directly.</p>
           <div id="storageInfo" class="card muted"></div>
           <button class="ghost wide" id="btnPersist">Ask Android to never evict my library</button>
@@ -1003,7 +1004,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '9.7.0';
+const APP_VERSION = '9.8.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -6153,11 +6154,55 @@ ${JSON.stringify(r, null, 2)}`;
   }
   function copyText(t) { try { navigator.clipboard && navigator.clipboard.writeText(t); } catch (e) {} }
 
+  /* Pulse never pulls media off these sites itself. What it can do is take a
+     file you already have — and most of these apps will hand you one through
+     their own save button. So say exactly which button, per site, instead of
+     a shrug. */
+  const SITE_HELP = [
+    {
+      re: /(^|\.)(tiktok\.com|vm\.tiktok\.com)$/i,
+      name: 'TikTok',
+      steps: [
+        'Open the video in TikTok',
+        'Tap Share, then "Save video" — it saves an mp4 to your gallery',
+        'Share that saved video into Pulse (Pulse is in the Android share sheet)',
+        'Pulse keeps the soundtrack and drops the picture'
+      ],
+      note: 'If Save video is greyed out, the creator has turned downloads off for that post. Nothing to be done about that from here.'
+    },
+    {
+      re: /(^|\.)(twitter\.com|x\.com|t\.co)$/i,
+      name: 'X',
+      steps: [
+        'X has no save button of its own for video',
+        'If it is your own post, you already have the original file — share that into Pulse',
+        'Otherwise there is no route through Pulse'
+      ],
+      note: ''
+    },
+    {
+      re: /(^|\.)(instagram\.com|facebook\.com|fb\.watch)$/i,
+      name: 'Meta',
+      steps: [
+        'Instagram and Facebook only let you save your own posts',
+        'For your own: open it, use the app\'s Download / Save option, then share the file into Pulse'
+      ],
+      note: ''
+    }
+  ];
+
+  function siteHelp(site, url) {
+    const lines = site.steps.map((s, i) => `${i + 1}. ${s}`).join('\n');
+    alert(`${site.name} links\n\nPulse will not pull media off ${site.name} — that is theirs to serve, not mine to take.\n\nWhat does work:\n\n${lines}${site.note ? '\n\n' + site.note : ''}`);
+  }
+
   function explainPageLink(url) {
     let host = '';
     try { host = new URL(url).hostname; } catch (e) {}
     if (BLOCKED_HOSTS.test(host)) { ytHelp(url); return; }
-    alert(`That link points at a web page, not at an audio or video file.\n\nPulse needs a direct file link — one ending in .mp3, .m4a, .mp4, .webm and so on. Podcast episode links usually look like that.\n\nIf ${host || 'the site'} has a download button, use it and then share the file into Pulse.`);
+    const site = SITE_HELP.find((s) => s.re.test(host));
+    if (site) { siteHelp(site, url); return; }
+    alert(`That link points at a web page, not at an audio or video file.\n\nPulse needs a direct file link — one ending in .mp3, .m4a, .mp4, .webm and so on. Podcast episode links usually look like that.\n\nIf ${host || 'the site'} has a download or save button, use it and then share the file into Pulse — Pulse takes video from the share sheet and keeps just the audio.`);
   }
 
   async function addLink(prefill) {
