@@ -988,7 +988,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '8.3.0';
+const APP_VERSION = '8.4.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -3320,6 +3320,7 @@ const FX = (() => {
     centreBand: true,       // kept for older saved settings; barPlace supersedes it
     barPlace: 'bottom',     // bottom | middle | full — where the bars sit on the full screen
     smokeA: '#ff6a1a', smokeB: '#1f8cff',   // the two smoke fronts
+    smokeDetail: 'fine',    // soft | fine | ultra — resolution and particle count
     orient: 'auto'          // auto | landscape | portrait (full-screen view)
   };
   const STYLE_PRESETS = {
@@ -3500,6 +3501,12 @@ const FX = (() => {
     off: null, ctx: null, parts: [], seed: 11, t: 0,
     sprA: null, sprB: null, key: '', burst: 0
   };
+  const DETAIL = {
+    soft:  { scale: 0.55, count: 260, rate: 9,  size: 1.00, alpha: 1.00, hz: 60 },
+    fine:  { scale: 1.00, count: 700, rate: 20, size: 0.46, alpha: 0.85, hz: 30 },
+    ultra: { scale: 1.00, count: 1300, rate: 34, size: 0.34, alpha: 0.75, hz: 30 }
+  };
+  const DETAIL_ORDER = ['ultra', 'fine', 'soft'];
 
   /* cheap value noise — hash, then smoothstep between lattice points */
   function hash2(x, y) {
@@ -3514,22 +3521,26 @@ const FX = (() => {
     const a = hash2(xi, yi), b = hash2(xi + 1, yi), c = hash2(xi, yi + 1), d = hash2(xi + 1, yi + 1);
     return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
   }
-  /* curl of the noise field = a flow that swirls and never converges */
+  /* curl of the noise field = a flow that swirls and never converges.
+     Two octaves: the coarse one moves the mass around, the fine one adds the
+     small tendrils that make it read as smoke rather than as fog. */
   function curl(x, y, t, out) {
     const e = 0.06;
-    const n1 = noise2(x, y + e + t), n2 = noise2(x, y - e + t);
-    const n3 = noise2(x + e, y + t), n4 = noise2(x - e, y + t);
-    out.x = (n1 - n2) / (2 * e);
-    out.y = -(n3 - n4) / (2 * e);
+    let cx = ((noise2(x, y + e + t) - noise2(x, y - e + t)) / (2 * e));
+    let cy = -((noise2(x + e, y + t) - noise2(x - e, y + t)) / (2 * e));
+    const X = x * 2.7 + 31.4, Y = y * 2.7 + 17.2, T = t * 1.9;
+    cx += 0.45 * ((noise2(X, Y + e + T) - noise2(X, Y - e + T)) / (2 * e));
+    cy += 0.45 * -((noise2(X + e, Y + T) - noise2(X - e, Y + T)) / (2 * e));
+    out.x = cx; out.y = cy;
   }
 
   function smokeSprite(colour) {
     const c = document.createElement('canvas');
     c.width = c.height = 64;
     const g = c.getContext('2d').createRadialGradient(32, 32, 0, 32, 32, 32);
-    g.addColorStop(0, colour.replace('rgb(', 'rgba(').replace(')', ',.62)'));
-    g.addColorStop(0.45, colour.replace('rgb(', 'rgba(').replace(')', ',.24)'));
-    g.addColorStop(0.75, colour.replace('rgb(', 'rgba(').replace(')', ',.06)'));
+    g.addColorStop(0, colour.replace('rgb(', 'rgba(').replace(')', ',.85)'));
+    g.addColorStop(0.28, colour.replace('rgb(', 'rgba(').replace(')', ',.5)'));
+    g.addColorStop(0.62, colour.replace('rgb(', 'rgba(').replace(')', ',.13)'));
     g.addColorStop(1, colour.replace('rgb(', 'rgba(').replace(')', ',0)'));
     const cx = c.getContext('2d');
     cx.fillStyle = g; cx.fillRect(0, 0, 64, 64);
@@ -3567,10 +3578,43 @@ const FX = (() => {
     });
   }
 
+  /* The smoke is the expensive layer, and it moves slowly, so it is stepped
+     at its own rate and the bars keep the full frame rate on top of it. */
   function drawRealSmoke(ctx, w, h, bass, dt) {
+    const D0 = DETAIL[style().smokeDetail] || DETAIL.fine;
+    RS.acc = (RS.acc || 0) + dt;
+    const step = 1 / D0.hz;
+    if (RS.off && RS.acc < step) {           /* reuse last frame's buffer */
+      ctx.save(); ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(RS.off, 0, 0, w, h); ctx.restore();
+      return;
+    }
+    const sdt = Math.min(0.08, RS.acc);
+    RS.acc = 0;
+    const t0 = performance.now();
+    smokeStep(ctx, w, h, bass, sdt);
+    /* if a phone cannot keep up, step the detail down once rather than
+       stutter through a workout */
+    RS.cost = RS.cost === undefined ? 0 : RS.cost * 0.9 + (performance.now() - t0) * 0.1;
+    if (RS.cost > 26 && !RS.downgraded) {
+      const i = DETAIL_ORDER.indexOf(style().smokeDetail || 'fine');
+      if (i >= 0 && i < DETAIL_ORDER.length - 1) {
+        RS.downgraded = true;
+        style().smokeDetail = DETAIL_ORDER[i + 1];
+        RS.parts.length = 0; RS.cost = 0;
+        save();
+        toast('Smoke detail lowered to keep it smooth');
+      }
+    }
+  }
+
+  function smokeStep(ctx, w, h, bass, dt) {
     RS.t += dt * 0.11;
-    /* half resolution keeps 300+ sprites cheap and adds a natural softness */
-    const ow = Math.max(120, Math.round(w / 2)), oh = Math.max(120, Math.round(h / 2));
+    /* Detail is a straight trade: the buffer resolution decides how fine a
+       wisp can be at all, the particle count decides how much structure
+       there is to see. Half-res was why it looked blurred. */
+    const D = DETAIL[style().smokeDetail] || DETAIL.fine;
+    const ow = Math.max(160, Math.round(w * D.scale)), oh = Math.max(160, Math.round(h * D.scale));
     if (!RS.off) { RS.off = document.createElement('canvas'); }
     if (RS.off.width !== ow || RS.off.height !== oh) {
       RS.off.width = ow; RS.off.height = oh;
@@ -3593,10 +3637,10 @@ const FX = (() => {
 
     /* keep the population up; beats push an extra puff in from both sides */
     if (V.beat > 0.7 && RS.burst <= 0) RS.burst = 8;
-    const want = 260;
-    let n = RS.parts.length < want ? 9 : 0;
-    if (RS.burst > 0) { n += 4; RS.burst--; }
-    while (n-- > 0 && RS.parts.length < 340) rsSpawn(RS.parts.length % 2 ? 1 : -1, w, h);
+    const want = D.count;
+    let n = RS.parts.length < want ? D.rate : 0;
+    if (RS.burst > 0) { n += Math.round(D.rate * 0.5); RS.burst--; }
+    while (n-- > 0 && RS.parts.length < D.count * 1.3) rsSpawn(RS.parts.length % 2 ? 1 : -1, w, h);
 
     const c = { x: 0, y: 0 };
     const flow = 0.115 + bass * 0.075;
@@ -3628,8 +3672,8 @@ const FX = (() => {
       const env = Math.min(1, k * 6) * Math.min(1, (1 - k) * 3);
       const a = p.a * env * (0.85 + bass * 0.4);
       if (a <= 0.002) continue;
-      const rad = p.r * Math.max(ow, oh) * (1 + bass * 0.15);
-      o.globalAlpha = a;
+      const rad = p.r * D.size * Math.max(ow, oh) * (1 + bass * 0.15);
+      o.globalAlpha = a * D.alpha;
       o.drawImage(p.side > 0 ? RS.sprB : RS.sprA, p.x * ow - rad, p.y * oh - rad, rad * 2, rad * 2);
     }
     o.globalAlpha = 1;
@@ -4486,6 +4530,11 @@ const FX = (() => {
         <label>Smoke 2 <input type="color" id="stSmokeB" value="${st.smokeB || '#1f8cff'}"></label>
         <button class="chip" id="stSmokeSwap">Swap</button>
       </div>
+      <label class="slider-row" id="stDetailRow" style="${st.bg === 'realsmoke' ? '' : 'display:none'}">Smoke detail
+        <select id="stDetail">
+          ${[['soft', 'soft — easiest on the battery'], ['fine', 'fine — sharp wisps'], ['ultra', 'ultra — finest, works the phone hardest']]
+            .map(([v, l]) => `<option value="${v}" ${(st.smokeDetail || 'fine') === v ? 'selected' : ''}>${l}</option>`).join('')}
+        </select></label>
       <label class="slider-row">Bars sit
         <select id="stBarPlace">
           ${[['bottom', 'along the bottom (half height)'], ['middle', 'across the middle'], ['full', 'full height']]
@@ -4617,7 +4666,10 @@ const FX = (() => {
     stBind('stBg', 'bg', () => {
       const r = $('stSmokeRow');
       if (r) r.style.display = (style().bg === 'realsmoke' || style().bg === 'smoke') ? '' : 'none';
+      const d = $('stDetailRow');
+      if (d) d.style.display = style().bg === 'realsmoke' ? '' : 'none';
     });
+    stBind('stDetail', 'smokeDetail', () => { RS.parts.length = 0; });
     ['stSmokeA', 'stSmokeB'].forEach((id, i) => {
       const n = $(id); if (!n) return;
       n.oninput = () => { style()[i ? 'smokeB' : 'smokeA'] = n.value; save(); };
