@@ -1003,7 +1003,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '9.4.0';
+const APP_VERSION = '9.5.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -3059,14 +3059,18 @@ const FLUID = (() => {
   /* three quality steps; the watchdog in fx.js walks down these if a phone
      cannot keep up, rather than letting the frame rate rot */
   const QUALITY = {
-    soft:  { simRes: 96,  dyeRes: 320, pressureIters: 12 },
-    fine:  { simRes: 128, dyeRes: 512, pressureIters: 18 },
-    ultra: { simRes: 160, dyeRes: 720, pressureIters: 24 }
+    soft:    { simRes: 96,  dyeRes: 320,  pressureIters: 12, dpr: 1.0 },
+    fine:    { simRes: 128, dyeRes: 512,  pressureIters: 18, dpr: 1.25 },
+    ultra:   { simRes: 160, dyeRes: 768,  pressureIters: 24, dpr: 1.75 },
+    /* for phones with room to spare: a finer grid, a dye buffer bigger than
+       most screens, and the canvas itself at full device resolution */
+    extreme: { simRes: 224, dyeRes: 1152, pressureIters: 30, dpr: 3.0 }
   };
   function setQuality(name) {
     const q = QUALITY[name] || QUALITY.fine;
     if (CFG.simRes === q.simRes && CFG.dyeRes === q.dyeRes) return false;
     CFG.simRes = q.simRes; CFG.dyeRes = q.dyeRes; CFG.pressureIters = q.pressureIters;
+    CFG.dpr = q.dpr || 1.25;
     simW = simH = dyeW = dyeH = 0;      /* force the buffers to be rebuilt */
     return true;
   }
@@ -3075,6 +3079,7 @@ const FLUID = (() => {
     simRes: 128,          // velocity grid on the short side
     dyeRes: 512,          // dye grid on the short side — this is the detail you see
     pressureIters: 18,
+    dpr: 1.25,            // how much of the phone's real resolution to draw at
     velDissipation: 0.32,
     dyeDissipation: 1.15,
     curl: 34,             // vorticity confinement strength
@@ -3335,7 +3340,7 @@ const FLUID = (() => {
 
   function resize(w, h) {
     if (!ok) return;
-    const dpr = Math.min(1.25, window.devicePixelRatio || 1);
+    const dpr = Math.min(CFG.dpr || 1.25, window.devicePixelRatio || 1);
     const cw = Math.max(1, Math.round(w * dpr)), ch = Math.max(1, Math.round(h * dpr));
     if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
     const ar = cw / ch;
@@ -4329,7 +4334,7 @@ const FX = (() => {
   /* The smoke is the expensive layer, and it moves slowly, so it is stepped
      at its own rate and the bars keep the full frame rate on top of it. */
   function drawRealSmoke(ctx, w, h, bass, dt) {
-    const D0 = DETAIL[style().smokeDetail] || DETAIL.fine;
+    const D0 = DETAIL[style().smokeDetail] || (style().smokeDetail === 'extreme' ? DETAIL.ultra : DETAIL.fine);
     RS.acc = (RS.acc || 0) + dt;
     const step = 1 / D0.hz;
     if (RS.off && RS.acc < step) { blitSmoke(ctx, w, h); return; }   /* reuse last buffer */
@@ -4358,7 +4363,7 @@ const FX = (() => {
     /* Detail is a straight trade: the buffer resolution decides how fine a
        wisp can be at all, the particle count decides how much structure
        there is to see. Half-res was why it looked blurred. */
-    const D = DETAIL[style().smokeDetail] || DETAIL.fine;
+    const D = DETAIL[style().smokeDetail] || (style().smokeDetail === 'extreme' ? DETAIL.ultra : DETAIL.fine);
     const ow = Math.max(160, Math.round(w * D.scale)), oh = Math.max(160, Math.round(h * D.scale));
     if (!RS.off) { RS.off = document.createElement('canvas'); }
     if (RS.off.width !== ow || RS.off.height !== oh) {
@@ -4508,7 +4513,7 @@ const FX = (() => {
       FL.slow = dtNow > 0.045 ? FL.slow + 1 : Math.max(0, FL.slow - 1);
       if (FL.slow > 90) {
         FL.slow = 0;
-        const order = ['ultra', 'fine', 'soft'];
+        const order = ['extreme', 'ultra', 'fine', 'soft'];
         const i = order.indexOf(FL.quality);
         if (i < order.length - 1) {
           st.smokeDetail = order[i + 1]; save();
@@ -5417,7 +5422,7 @@ const FX = (() => {
       ${slider('stSpeed', 'Movement speed', 0, 100, 1, st.smokeSpeed === undefined ? 50 : st.smokeSpeed, '')}
       <label class="slider-row" id="stDetailRow" style="${(st.bg === 'realsmoke' || st.bg === 'fluid') ? '' : 'display:none'}">Smoke detail
         <select id="stDetail">
-          ${[['soft', 'soft — easiest on the battery'], ['fine', 'fine — sharp wisps'], ['ultra', 'ultra — finest, works the phone hardest']]
+          ${[['soft', 'soft — easiest on the battery'], ['fine', 'fine — sharp wisps'], ['ultra', 'ultra — very fine'], ['extreme', 'extreme — full resolution, for a fast phone']]
             .map(([v, l]) => `<option value="${v}" ${(st.smokeDetail || 'fine') === v ? 'selected' : ''}>${l}</option>`).join('')}
         </select></label>
       <label class="slider-row">Bars sit
@@ -5701,6 +5706,7 @@ const FX = (() => {
     });
     L.push(`now-playing open: ${$('np').classList.contains('open')} · gym HUD open: ${$('hud').classList.contains('open')} · full-screen open: ${window.VIZFULL ? VIZFULL.isOpen() : '?'}`);
     L.push(`drawing right now: ${vizActive()}${vizBlocker() ? '  <-- blocked: ' + vizBlocker() : ''}`);
+    L.push('(the four lines above are read before the speed test opens the full-screen view, so a zero size there is normal when you run this from Settings)');
 
     /* --- speed --- */
     L.push('', 'SPEED');
