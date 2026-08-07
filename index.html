@@ -1003,7 +1003,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '9.6.0';
+const APP_VERSION = '9.7.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -3563,17 +3563,26 @@ window.FLUID = FLUID;
 </script>
   <script>
 /* ============================================================
-   Pulse SPACE — the planets scene, drawn by the GPU.
+   Pulse SPACE — flying through a universe, drawn by the GPU.
 
-   One full-screen fragment shader does the lot: a layered
-   starfield with parallax, a drifting nebula built from fractal
-   noise, and shaded planets with banded surfaces, rings, glow
-   and a terminator. Everything is procedural, so there are no
-   textures to download and it stays sharp at any resolution.
+   Not a picture of space: a camera actually travelling through
+   it. Every pixel casts a ray, and the ray is marched through a
+   stack of depth slices. Each slice holds a hashed grid of
+   stars, so as the travel distance grows the slices wrap and
+   stars stream past with true perspective — near ones fast and
+   bright, far ones slow and dim.
+
+   Push the speed up and each star is stretched along the
+   direction it is travelling away from the centre, which is
+   what makes a warp jump read as a warp jump. The beat drives
+   that, so a drop throws you into hyperspace.
+
+   Spiral galaxies and planets sit at their own depths and grow
+   as you close on them, then sweep past the camera.
    ============================================================ */
 const SPACEGL = (() => {
   let gl = null, canvas = null, prog = null, buf = null, ok = false, failed = false, u = {};
-  let t = 0;
+  let t = 0, z = 0, warp = 0;
 
   const VERT = `#version 300 es
   precision highp float;
@@ -3587,13 +3596,17 @@ const SPACEGL = (() => {
   out vec4 outColor;
 
   uniform vec2  uRes;
-  uniform float uTime;
+  uniform float uTime;      /* wall clock, for rotation and twinkle      */
+  uniform float uZ;         /* how far we have travelled                 */
+  uniform float uWarp;      /* 0 = cruising, 1 = full light speed        */
   uniform float uBass;
   uniform float uBeat;
   uniform vec3  uC1, uC2, uC3;
   uniform float uPlanets;
 
-  /* ---- noise ---- */
+  const float LAYERS = 12.0;
+
+  float hash11(float p) { p = fract(p * 0.1031); p *= p + 33.33; return fract(p * (p + p)); }
   float hash(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
     p += dot(p, p + 45.32);
@@ -3601,127 +3614,157 @@ const SPACEGL = (() => {
   }
   float noise(vec2 p) {
     vec2 i = floor(p), f = fract(p);
-    vec2 u2 = f * f * (3.0 - 2.0 * f);
-    return mix(mix(hash(i), hash(i + vec2(1, 0)), u2.x),
-               mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u2.x), u2.y);
+    vec2 w = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1, 0)), w.x),
+               mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), w.x), w.y);
   }
   float fbm(vec2 p) {
     float v = 0.0, a = 0.5;
-    for (int i = 0; i < 6; i++) { v += a * noise(p); p *= 2.03; a *= 0.5; }
+    for (int i = 0; i < 3; i++) { v += a * noise(p); p *= 2.07; a *= 0.5; }
     return v;
   }
+  mat2 rot(float a) { float s = sin(a), c = cos(a); return mat2(c, -s, s, c); }
 
-  /* ---- stars: a hashed grid, one star per cell, sized by depth ---- */
-  vec3 stars(vec2 uv, float depth, float density, float drift) {
-    vec2 p = uv * density + vec2(uTime * drift, uTime * drift * 0.22);
-    vec2 i = floor(p), f = fract(p);
+  /* ---- one depth slice of stars ----------------------------------------
+     The ray hits this slice at sp. Stars live on a hashed grid there, and
+     each is smeared along the radial direction by the warp amount, because
+     that is the direction it is sliding away from the centre of the screen. */
+  vec3 starSlice(vec2 sp, float fade, float cell, float seed, float streak) {
+    vec2 gp = sp * cell;
+    vec2 id = floor(gp), f = fract(gp) - 0.5;
+    vec2 rdir = normalize(sp + vec2(1e-5));
+    /* the streak only ever runs outward, so walk the cells along that line
+       rather than the whole 3x3 block — same picture, a third of the work */
+    vec2 step2 = abs(rdir.x) > abs(rdir.y) ? vec2(sign(rdir.x), 0.0) : vec2(0.0, sign(rdir.y));
     vec3 acc = vec3(0.0);
-    for (int y = -1; y <= 1; y++) {
-      for (int x = -1; x <= 1; x++) {
-        vec2 g = vec2(float(x), float(y));
-        float h = hash(i + g);
-        if (h < 0.86) continue;                       /* most cells are empty */
-        vec2 pos = g + vec2(hash(i + g + 3.1), hash(i + g + 7.7)) - f;
-        float d = length(pos);
-        float tw = 0.55 + 0.45 * sin(uTime * 2.6 + h * 40.0);
-        float bright = smoothstep(0.10, 0.0, d) * (h - 0.86) / 0.14;
-        /* faintly coloured stars read as more real than pure white */
-        vec3 tint = mix(vec3(0.75, 0.85, 1.0), vec3(1.0, 0.88, 0.75), hash(i + g + 11.3));
-        acc += tint * bright * tw * depth * (0.85 + uBeat * 0.5);
-      }
+    for (int k = -1; k <= 1; k++) {
+      vec2 o = step2 * float(k);
+      float h = hash(id + o + seed);
+      if (h < 0.88) continue;                       /* space is mostly empty */
+      vec2 star = o + vec2(hash(id + o + 5.2), hash(id + o + 9.7)) - 0.5;
+      vec2 dv = f - star;
+      float along = dot(dv, rdir);
+      vec2 perp = dv - along * rdir;
+      float d = length(vec2(along / (1.0 + streak), length(perp)));
+      float bright = smoothstep(0.075, 0.0, d) * (h - 0.88) / 0.12 * 1.7;
+      /* a streaked star is dimmer per pixel — the same light is spread along it */
+      bright /= (1.0 + streak * 0.5);
+      float tw = 0.6 + 0.4 * sin(uTime * 3.1 + h * 60.0);
+      vec3 tint = mix(vec3(0.72, 0.82, 1.0), vec3(1.0, 0.86, 0.7), hash(id + o + 17.1));
+      /* the blue shift of running towards something at speed */
+      tint = mix(tint, vec3(0.6, 0.78, 1.0), uWarp * 0.6);
+      acc += tint * bright * tw * fade;
     }
     return acc;
   }
 
-  /* ---- one planet, drawn as a shaded disc ---- */
-  vec3 planet(vec2 uv, float idx, inout float cover) {
-    float h1 = hash(vec2(idx, 1.7)), h2 = hash(vec2(idx, 4.3)), h3 = hash(vec2(idx, 9.1));
-    float orbit = 0.30 + h1 * 0.55;
-    float speed = (0.045 + h2 * 0.075) * (idx > 1.5 ? -1.0 : 1.0);
-    float ang = uTime * speed + h3 * 6.283;
-    vec2 c = vec2(cos(ang) * orbit * 1.15, sin(ang) * orbit * 0.55);
-    float r = (0.055 + h2 * 0.075) * (1.0 + uBass * 0.10);
+  /* ---- a spiral galaxy, seen at some angle ---- */
+  vec3 galaxy(vec2 sp, float fade, float seed, float scale) {
+    float h1 = hash11(seed), h2 = hash11(seed + 3.1), h3 = hash11(seed + 7.7);
+    vec2 c = (vec2(h1, h2) - 0.5) * 2.4;
+    vec2 d = (sp - c) / scale;
+    d = rot(uTime * (0.02 + h3 * 0.03) + h1 * 6.0) * d;
+    d.y /= mix(1.0, 3.2, h2);                 /* tilt: a disc seen edge-on-ish */
+    float r = length(d);
+    if (r > 1.4) return vec3(0.0);
+    float a = atan(d.y, d.x);
+    /* logarithmic spiral arms */
+    float arms = sin(a * 2.0 + log(max(r, 0.02)) * 5.5 + h1 * 6.28);
+    arms = 0.5 + 0.5 * arms;
+    arms *= smoothstep(1.35, 0.1, r);
+    float dust = fbm(d * 4.0 + h1 * 10.0);
+    float body = arms * (0.45 + 0.55 * dust) * exp(-r * 1.6);
+    float core = exp(-r * r * 34.0) * 1.6;
+    vec3 col = mix(uC3, uC1, clamp(r * 0.9, 0.0, 1.0)) * body
+             + mix(vec3(1.0, 0.94, 0.82), uC2, 0.35) * core;
+    return col * fade * (0.75 + uBass * 0.5);
+  }
 
-    vec2 d = uv - c;
-    vec3 col = vec3(0.0);
-    /* decorrelated mixes so neighbouring planets do not come out the same
-       colour when the palette only has a couple of stops */
-    float m1 = fract(h1 * 3.73 + idx * 0.41);
-    float m2 = fract(h2 * 5.31 + idx * 0.77);
-    vec3 base = mix(mix(uC1, uC2, m1), uC3, m2);
-    base = mix(base, base.zxy, step(0.66, fract(h3 * 7.1)) * 0.55);
-
-    /* ring first, so the planet body covers its near side */
-    if (h3 > 0.45) {
-      float tilt = (h1 - 0.5) * 1.3;
-      vec2 rp = vec2(d.x * cos(tilt) - d.y * sin(tilt), (d.x * sin(tilt) + d.y * cos(tilt)) / 0.28);
-      float rr = length(rp);
-      float ring = smoothstep(r * 2.35, r * 2.1, rr) * smoothstep(r * 1.45, r * 1.65, rr);
-      /* banding across the ring */
-      ring *= 0.55 + 0.45 * sin(rr / r * 26.0);
-      col += base * ring * 0.75;
-    }
-
+  /* ---- a planet passing by ---- */
+  vec3 planet(vec2 sp, float fade, float seed, float scale) {
+    float h1 = hash11(seed + 1.7), h2 = hash11(seed + 4.3), h3 = hash11(seed + 9.1);
+    vec2 c = (vec2(h1, h2) - 0.5) * 2.6;
+    vec2 d = (sp - c);
+    float r = (0.12 + h2 * 0.16) * scale;
     float dd = length(d);
-    float edge = smoothstep(r, r * 0.985, dd);
-    if (edge > 0.001) {
-      /* fake the sphere: z from the disc equation gives a real normal */
-      float z = sqrt(max(0.0, r * r - dd * dd)) / r;
-      vec3 n = normalize(vec3(d / r, z));
-      vec3 lightDir = normalize(vec3(-0.55, 0.42, 0.72));
-      float lam = max(0.0, dot(n, lightDir));
-      /* surface: latitude bands warped by noise, like gas giants */
-      vec2 sp = vec2(atan(n.y, n.x) * 0.5, n.y * 2.6 + idx * 5.0);
-      float bands = fbm(sp * 3.0 + vec2(uTime * 0.04, 0.0));
-      bands = 0.65 + 0.5 * sin(n.y * 9.0 + bands * 4.2 + idx);
-      vec3 body = base * (0.35 + 0.65 * bands);
-      col += body * (0.10 + lam * 1.25) * edge;
-      /* rim light so it separates from the black */
-      float rim = pow(1.0 - z, 3.0) * lam;
-      col += base * rim * 0.7 * edge;
-      cover = max(cover, edge);
+    if (dd > r * 2.6) return vec3(0.0);
+    vec3 base = mix(mix(uC1, uC2, fract(h1 * 3.7)), uC3, fract(h2 * 5.3));
+    vec3 col = vec3(0.0);
+    if (h3 > 0.5) {                                  /* rings */
+      vec2 rp = rot((h1 - 0.5) * 1.4) * d;
+      rp.y /= 0.26;
+      float rr = length(rp);
+      float ring = smoothstep(r * 2.3, r * 2.05, rr) * smoothstep(r * 1.4, r * 1.6, rr);
+      ring *= 0.55 + 0.45 * sin(rr / r * 24.0);
+      col += base * ring * 0.7;
     }
-
-    /* atmosphere glow */
-    float glow = exp(-max(0.0, dd - r) / (r * 0.55)) * 0.30;
-    col += base * glow * (0.7 + uBass * 0.6);
-    return col;
+    float edge = smoothstep(r, r * 0.98, dd);
+    if (edge > 0.001) {
+      float zz = sqrt(max(0.0, r * r - dd * dd)) / r;
+      vec3 n = normalize(vec3(d / r, zz));
+      float lam = max(0.0, dot(n, normalize(vec3(-0.5, 0.4, 0.75))));
+      float bands = 0.65 + 0.5 * sin(n.y * 9.0 + sin(n.x * 5.0 + seed) * 1.6 + seed);
+      col += base * (0.35 + 0.65 * bands) * (0.10 + lam * 1.25) * edge;
+      col += base * pow(1.0 - zz, 3.0) * lam * 0.6 * edge;
+    }
+    col += base * exp(-max(0.0, dd - r) / (r * 0.5)) * 0.22;
+    return col * fade;
   }
 
   void main() {
-    float aspect = uRes.x / uRes.y;
     vec2 uv = vPos;
-    uv.x *= aspect;
+    uv.x *= uRes.x / uRes.y;
+
+    /* the ray for this pixel */
+    vec2 rd = uv * 0.85;
 
     vec3 col = vec3(0.0);
 
-    /* deep field wash */
-    float vign = 1.0 - 0.55 * length(vPos * vec2(0.75, 0.95));
-    col += mix(vec3(0.012, 0.012, 0.035), vec3(0.05, 0.04, 0.10), vign) * vign;
+    /* faint deep-field glow and a nebula that thins out as we accelerate */
+    float neb = fbm(uv * 1.3 + vec2(uZ * 0.02, uTime * 0.01));
+    col += mix(uC1, uC3, clamp(neb, 0.0, 1.0)) * pow(max(0.0, neb - 0.42), 2.0)
+           * (0.5 + uBass * 0.5) * (1.0 - uWarp * 0.75);
+    col += vec3(0.005, 0.006, 0.018);
 
-    /* nebula: two fbm layers drifting at different rates */
-    vec2 np = uv * 1.15 + vec2(uTime * 0.012, uTime * 0.006);
-    float n1 = fbm(np);
-    float n2 = fbm(np * 1.9 - vec2(uTime * 0.018, 0.0));
-    float neb = pow(max(0.0, n1 * 1.25 - 0.35), 2.0) * 1.5;
-    float neb2 = pow(max(0.0, n2 * 1.2 - 0.45), 2.2) * 1.2;
-    col += mix(uC1, uC3, clamp(n2, 0.0, 1.0)) * neb * (0.30 + uBass * 0.30);
-    col += mix(uC2, uC3, clamp(n1, 0.0, 1.0)) * neb2 * (0.18 + uBass * 0.22);
-
-    /* three star layers, near ones drifting faster */
-    col += stars(uv, 0.55, 22.0, 0.010);
-    col += stars(uv, 0.85, 42.0, 0.020);
-    col += stars(uv, 1.00, 78.0, 0.036);
-
-    /* planets, nearest last so they overlap correctly enough */
-    float cover = 0.0;
-    for (int i = 0; i < 5; i++) {
-      if (float(i) >= uPlanets) break;
-      col += planet(uv, float(i), cover);
+    /* --- march the star volume --- */
+    float streak = uWarp * uWarp * 16.0 + uBeat * 1.2;
+    for (float i = 0.0; i < LAYERS; i += 1.0) {
+      /* each slice sits at its own depth and wraps as we travel */
+      float f = fract(i / LAYERS + uZ);
+      float depth = mix(0.06, 1.0, f);
+      /* near slices are big on screen, far ones small */
+      vec2 sp = rd / depth;
+      /* fade in from the far plane, out as it sweeps past the camera */
+      float fade = smoothstep(0.0, 0.25, f) * smoothstep(1.0, 0.72, f);
+      col += starSlice(sp, fade * 0.9, 3.6, i * 13.7, streak * depth);
     }
 
-    /* tone: soft shoulder, keeps stars from blowing out */
-    col = col / (1.0 + col * 0.45);
+    /* --- galaxies and planets, each at their own depth --- */
+    for (float i = 0.0; i < 2.0; i += 1.0) {
+      float f = fract(i / 2.0 + uZ * 0.32 + 0.13);
+      float depth = mix(0.09, 1.0, f);
+      float fade = smoothstep(0.0, 0.3, f) * smoothstep(1.0, 0.7, f) * (1.0 - uWarp * 0.55);
+      col += galaxy(rd / depth, fade, i * 21.3 + 2.0, 0.55);
+    }
+    for (float i = 0.0; i < 3.0; i += 1.0) {
+      if (i >= uPlanets) break;
+      float f = fract(i / 3.0 + uZ * 0.5 + 0.6);
+      float depth = mix(0.10, 1.0, f);
+      float fade = smoothstep(0.0, 0.3, f) * smoothstep(1.0, 0.68, f) * (1.0 - uWarp * 0.7);
+      col += planet(rd / depth, fade, i * 31.7, 1.0 / depth * 0.35);
+    }
+
+    /* --- the jump itself --- */
+    /* a bloom that gathers at the vanishing point as the warp builds */
+    float centre = exp(-dot(uv, uv) * 26.0);
+    col += mix(vec3(0.55, 0.72, 1.0), vec3(1.0), uWarp) * centre * uWarp * 0.8;
+    /* and a flash on the hardest hits */
+    col += vec3(0.8, 0.88, 1.0) * uBeat * uBeat * 0.10 * (0.2 + uWarp);
+
+    /* vignette keeps the eye at the centre of the tunnel */
+    col *= 1.0 - 0.5 * pow(length(vPos * vec2(0.8, 0.95)), 2.2);
+
+    col = col / (1.0 + col * 0.32);
     outColor = vec4(col, 1.0);
   }`;
 
@@ -3754,7 +3797,7 @@ const SPACEGL = (() => {
     gl.bindAttribLocation(prog, 0, 'aPos');
     gl.linkProgram(prog);
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) { console.warn('space link', gl.getProgramInfoLog(prog)); failed = true; return false; }
-    ['uRes', 'uTime', 'uBass', 'uBeat', 'uC1', 'uC2', 'uC3', 'uPlanets']
+    ['uRes', 'uTime', 'uZ', 'uWarp', 'uBass', 'uBeat', 'uC1', 'uC2', 'uC3', 'uPlanets']
       .forEach((n) => { u[n] = gl.getUniformLocation(prog, n); });
     buf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -3768,8 +3811,24 @@ const SPACEGL = (() => {
   function frame(dt, opts) {
     if (!ok) return false;
     const o = opts || {};
-    t += dt * (o.speed === undefined ? 1 : o.speed);
-    const dpr = Math.min(1.5, window.devicePixelRatio || 1);
+    const speed = o.speed === undefined ? 1 : o.speed;
+    const bass = o.bass || 0, beat = o.beat || 0;
+
+    t += dt;
+    /* Warp builds on the beat and bleeds away, so the jump lands with the
+       drop rather than running flat out the whole time. */
+    const on = o.warpOnBeat !== false;
+    /* a jump should feel like an event: it needs a beat landing on top of
+       real energy, not every kick drum */
+    const target = on
+      ? Math.min(1, beat * 0.55 + Math.max(0, bass - 0.55) * 1.6)
+      : Math.min(0.35, bass * 0.4);
+    warp += (target - warp) * Math.min(1, dt * (target > warp ? 5 : 1.1));
+    /* cruise, then a lot faster once the warp kicks in */
+    const travel = (0.035 + bass * 0.05) * speed + warp * warp * 1.15 * speed;
+    z = (z + travel * dt) % 1000;
+
+    const dpr = Math.min(o.dpr || 1.75, window.devicePixelRatio || 1);
     const r = canvas.getBoundingClientRect();
     const w = Math.max(1, Math.round(r.width * dpr)), h = Math.max(1, Math.round(r.height * dpr));
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
@@ -3780,18 +3839,20 @@ const SPACEGL = (() => {
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
     gl.uniform2f(u.uRes, w, h);
     gl.uniform1f(u.uTime, t);
-    gl.uniform1f(u.uBass, o.bass || 0);
-    gl.uniform1f(u.uBeat, o.beat || 0);
+    gl.uniform1f(u.uZ, z);
+    gl.uniform1f(u.uWarp, warp);
+    gl.uniform1f(u.uBass, bass);
+    gl.uniform1f(u.uBeat, beat);
     const c1 = o.c1 || [0.45, 0.62, 1.0], c2 = o.c2 || [1.0, 0.55, 0.3], c3 = o.c3 || [0.65, 0.4, 1.0];
     gl.uniform3f(u.uC1, c1[0], c1[1], c1[2]);
     gl.uniform3f(u.uC2, c2[0], c2[1], c2[2]);
     gl.uniform3f(u.uC3, c3[0], c3[1], c3[2]);
-    gl.uniform1f(u.uPlanets, o.planets || 4);
+    gl.uniform1f(u.uPlanets, Math.min(3, o.planets || 3));
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     return true;
   }
 
-  return { supported, init, frame, get ready() { return ok; }, get failed() { return failed; } };
+  return { supported, init, frame, get warp() { return warp; }, get ready() { return ok; }, get failed() { return failed; } };
 })();
 window.SPACEGL = SPACEGL;
 
@@ -4128,6 +4189,7 @@ const FX = (() => {
     smokeSpeed: 50,         // 0-100, how fast everything moves
     smokeCount: 2,          // how many smoke fronts, 2 to 4
     smokeC: '#25e5a7', smokeD: '#c85cff',   // the third and fourth fronts
+    warpOnBeat: true,       // space: hit light speed on the drops
     orient: 'auto'          // auto | landscape | portrait (full-screen view)
   };
   const STYLE_PRESETS = {
@@ -4614,10 +4676,13 @@ const FX = (() => {
     if (!SK.on) { cv.classList.remove('hidden'); SK.on = true; }
     const stops = paletteStops();
     const pick = (i) => hexToRgbArr(stops[Math.min(i, stops.length - 1)], 1);
+    const stq = style().smokeDetail || 'fine';
     SPACEGL.frame(Math.min(0.033, V.dt || 0.016), {
       bass, beat: V.beat, speed: speedFactor(),
+      warpOnBeat: style().warpOnBeat !== false,
+      dpr: stq === 'soft' ? 1 : stq === 'fine' ? 1.25 : stq === 'ultra' ? 1.75 : 3,
       c1: pick(0), c2: pick(1), c3: pick(2),
-      planets: Math.max(2, Math.min(5, (+style().smokeCount || 2) + 2))
+      planets: Math.max(1, Math.min(3, (+style().smokeCount || 2)))
     });
     return true;
   }
@@ -5471,6 +5536,7 @@ const FX = (() => {
         <label class="sm4" style="${(+st.smokeCount || 2) >= 4 ? '' : 'display:none'}">Smoke 4 <input type="color" id="stSmokeD" value="${st.smokeD || '#c85cff'}"></label>
         <button class="chip" id="stSmokeSwap">Swap</button>
       </div>
+      <label class="switch" id="stWarpRow" style="${st.bg === 'space' ? '' : 'display:none'}"><input type="checkbox" id="stWarp" ${st.warpOnBeat !== false ? 'checked' : ''}><span>Jump to light speed on the beat</span></label>
       <label class="slider-row" id="stCountRow" style="${(st.bg === 'realsmoke' || st.bg === 'fluid') ? '' : 'display:none'}">How many fronts
         <select id="stSmokeCount">
           ${[[2, 'two — left and right'], [3, 'three — plus one from the bottom'], [4, 'four — from all sides']]
@@ -5617,6 +5683,8 @@ const FX = (() => {
       if (d) d.style.display = (style().bg === 'realsmoke' || style().bg === 'fluid') ? '' : 'none';
       const cr = $('stCountRow');
       if (cr) cr.style.display = (style().bg === 'realsmoke' || style().bg === 'fluid') ? '' : 'none';
+      const wr = $('stWarpRow');
+      if (wr) wr.style.display = style().bg === 'space' ? '' : 'none';
     });
     stBind('stDetail', 'smokeDetail', () => { RS.parts.length = 0; });
     ['stSmokeA', 'stSmokeB', 'stSmokeC', 'stSmokeD'].forEach((id, i) => {
@@ -5630,6 +5698,8 @@ const FX = (() => {
       els('.sm3').forEach((e) => e.style.display = +cnt.value >= 3 ? '' : 'none');
       els('.sm4').forEach((e) => e.style.display = +cnt.value >= 4 ? '' : 'none');
     };
+    const wp = $('stWarp');
+    if (wp) wp.onchange = () => { style().warpOnBeat = wp.checked; save(); };
     const spd2 = $('stSpeed');
     if (spd2) spd2.oninput = () => {
       style().smokeSpeed = +spd2.value; save();
