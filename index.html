@@ -404,7 +404,7 @@ html[data-theme="light"] .vid-badge{background:#e2ecfb;color:#1d5b9e}
 .vf-meta{left:0;right:0;text-align:center}
 .vf-meta.sticky{opacity:1!important}
 .vf-meta[data-pos="off"]{display:none}
-.vf-meta[data-pos="tl"],.vf-meta[data-pos="tr"]{bottom:auto;top:calc(var(--safe-t) + 44px)}
+.vf-meta[data-pos="tl"],.vf-meta[data-pos="tr"],.vf-meta[data-pos="top"]{bottom:auto;top:calc(var(--safe-t) + 44px)}
 .vf-meta[data-pos="tl"],.vf-meta[data-pos="bl"]{text-align:left;padding-left:18px}
 .vf-meta[data-pos="tr"],.vf-meta[data-pos="br"]{text-align:right;padding-right:18px}
 .vf-meta[data-size="micro"] .vf-title{font-size:11px;font-weight:600;letter-spacing:.04em}
@@ -988,7 +988,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '8.2.0';
+const APP_VERSION = '8.3.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -3315,9 +3315,10 @@ const FX = (() => {
     palette: 'accent',      // accent | rainbow | cyberpunk | vice | ice | custom
     bg: 'none',             // none | smoke | grid | police
     c1: '#ff3e58', c2: '#ff8c3c', c3: '#8b5cf6',
-    textPos: 'bottom', textSize: 'tiny', textAlways: true,
+    textPos: 'top', textSize: 'tiny', textAlways: true,
     dir: 'v',               // v = bars rise from the bottom, h = bars run from the left
-    centreBand: true,       // with a background on, keep the bars to a band across the middle
+    centreBand: true,       // kept for older saved settings; barPlace supersedes it
+    barPlace: 'bottom',     // bottom | middle | full — where the bars sit on the full screen
     smokeA: '#ff6a1a', smokeB: '#1f8cff',   // the two smoke fronts
     orient: 'auto'          // auto | landscape | portrait (full-screen view)
   };
@@ -3336,6 +3337,13 @@ const FX = (() => {
     const m = mix();
     if (!m.style) m.style = {};
     for (const k of Object.keys(STYLE_DEFAULTS)) if (m.style[k] === undefined) m.style[k] = STYLE_DEFAULTS[k];
+    /* one-off move to the new full-screen layout: name at the top, bars along
+       the bottom. Only runs once, so a later change of mind sticks. */
+    if (!m.style.layout82) {
+      m.style.layout82 = true;
+      if (m.style.textPos === 'bottom') m.style.textPos = 'top';
+      m.style.barPlace = 'bottom';
+    }
     return m.style;
   }
   const PALETTES = {
@@ -3923,13 +3931,20 @@ const FX = (() => {
     /* With a scene behind them, full-height bars would wall it off. Squeeze
        them into a band across the middle instead, so the smoke or the
        planets read around the edges — the bars stay the centrepiece. */
-    const scenic = (c.id === 'vizBig' || c.id === 'vizPreview') && st.bg !== 'none' && st.centreBand !== false;
+    const big = c.id === 'vizBig' || c.id === 'vizPreview';
+    const place = st.barPlace || (st.centreBand === false ? 'full' : 'middle');
+    const scenic = big && place !== 'full';
     let band = 0, inset = 0;
     if (scenic) {
-      band = Math.round(h * (shape === 'arc' ? 0.55 : 0.46));
+      /* bottom = a low strip so the scene owns the screen; middle = the old
+         centred band, at twice the height */
+      const share = place === 'bottom' ? (shape === 'arc' ? 0.30 : 0.23)
+                                       : (shape === 'arc' ? 0.55 : 0.46);
+      band = Math.round(h * share);
       inset = shape === 'bars3d' ? 0 : Math.round(w * 0.08);
+      const top = place === 'bottom' ? h - band - Math.round(h * 0.02) : Math.round((h - band) / 2);
       ctx.save();
-      ctx.translate(inset, Math.round((h - band) / 2));
+      ctx.translate(inset, top);
     }
     const bh = scenic ? band : h;
     const bw2 = scenic ? w - inset * 2 : w;
@@ -4471,7 +4486,11 @@ const FX = (() => {
         <label>Smoke 2 <input type="color" id="stSmokeB" value="${st.smokeB || '#1f8cff'}"></label>
         <button class="chip" id="stSmokeSwap">Swap</button>
       </div>
-      <label class="switch"><input type="checkbox" id="stBand" ${st.centreBand !== false ? 'checked' : ''}><span>With a background on, keep the bars to the middle</span></label>
+      <label class="slider-row">Bars sit
+        <select id="stBarPlace">
+          ${[['bottom', 'along the bottom (half height)'], ['middle', 'across the middle'], ['full', 'full height']]
+            .map(([v, l]) => `<option value="${v}" ${(st.barPlace || 'bottom') === v ? 'selected' : ''}>${l}</option>`).join('')}
+        </select></label>
       <p class="hint">Backgrounds and 3D only draw on the full-screen visualizer (and the preview below) — the in-app strip stays light on battery.</p>
       ${slider('mVizI', 'Visualizer sensitivity', 0.5, 2.5, 0.1, m.vizIntensity, '×')}
       <canvas id="vizPreview" class="viz-preview" data-mode="${m.viz}"></canvas>
@@ -4491,7 +4510,7 @@ const FX = (() => {
       <h3 class="section-h">Track name on the full-screen view</h3>
       <label class="slider-row">Position
         <select id="stTextPos">
-          ${[['bottom', 'bottom centre'], ['tl', 'top left'], ['tr', 'top right'], ['bl', 'bottom left'], ['br', 'bottom right'], ['off', 'hidden']]
+          ${[['top', 'top centre'], ['bottom', 'bottom centre'], ['tl', 'top left'], ['tr', 'top right'], ['bl', 'bottom left'], ['br', 'bottom right'], ['off', 'hidden']]
             .map(([v, l]) => `<option value="${v}" ${st.textPos === v ? 'selected' : ''}>${l}</option>`).join('')}
         </select></label>
       <label class="slider-row">Size
@@ -4617,7 +4636,7 @@ const FX = (() => {
     stBind('stTextSize', 'textSize');
     ['stc1', 'stc2', 'stc3'].forEach((id, i) => { const n = $(id); if (n) n.oninput = () => { style()['c' + (i + 1)] = n.value; save(); }; });
     const ta = $('stTextAlways'); if (ta) ta.onchange = () => { style().textAlways = ta.checked; save(); applyTextStyle(); };
-    const bnd = $('stBand'); if (bnd) bnd.onchange = () => { style().centreBand = bnd.checked; save(); };
+    stBind('stBarPlace', 'barPlace');
     els('[data-stylepreset]').forEach((b) => b.onclick = () => {
       Object.assign(style(), STYLE_PRESETS[b.dataset.stylepreset]);
       save(); renderMixer(); toast(b.dataset.stylepreset);
