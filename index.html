@@ -484,6 +484,8 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
 #vizGL{position:absolute;inset:0;width:100%;height:100%;display:block;z-index:0}
 #vizGL.hidden{display:none}
 #vizFull #vizBig{position:relative;z-index:1}
+#vizSky{position:absolute;inset:0;width:100%;height:100%;display:block;z-index:0}
+#vizSky.hidden{display:none}
 
 </style>
 </head>
@@ -963,6 +965,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
   <!-- ── Full-screen visualizer ─────────────────────────────── -->
   <section id="vizFull">
     <canvas id="vizGL" class="hidden"></canvas>
+    <canvas id="vizSky" class="hidden"></canvas>
     <canvas id="vizBig"></canvas>
     <button class="icon-btn vf-x" id="vfClose" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     <div class="vf-hint" id="vfHint">tap anywhere to leave</div>
@@ -994,7 +997,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '9.1.0';
+const APP_VERSION = '9.2.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -3355,6 +3358,10 @@ const FLUID = (() => {
     const o = opts || {};
     const bass = o.bass || 0, beat = o.beat || 0;
     const A = o.colourA || [1, 0.35, 0.05], B = o.colourB || [0.1, 0.45, 1];
+    /* speed scales the whole simulation clock, so everything — advection,
+       vorticity, dissipation — slows or quickens together and stays stable */
+    const spd = o.speed === undefined ? 1 : Math.max(0.05, o.speed);
+    dt = Math.min(0.05, dt * spd);
     t += dt;
 
     gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
@@ -3362,20 +3369,33 @@ const FLUID = (() => {
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
     gl.disable(gl.BLEND);
 
-    /* feed the two fronts: streams from the left and right edges, wandering
-       up and down, pushed harder on the beat */
+    /* feed the fronts: each one streams in from its own edge, wandering along
+       it, pushed harder on the beat */
+    const sources = o.sources && o.sources.length ? o.sources : [
+      { edge: 'left', colour: A }, { edge: 'right', colour: B }
+    ];
     injectAcc += dt;
     const every = 1 / 26;
     while (injectAcc > every) {
       injectAcc -= every;
-      const push = (0.5 + bass * 0.85 + beat * 0.65) * 1900;
+      const push = (0.5 + bass * 0.85 + beat * 0.65) * 1900 * (o.speed === undefined ? 1 : (0.35 + o.speed * 1.3));
       const wob = (n) => 0.5 + 0.42 * Math.sin(t * (0.31 + n * 0.17) + n * 2.1) * Math.cos(t * 0.13 + n);
-      for (let i = 0; i < 2; i++) {
-        const yL = wob(i), yR = wob(i + 3.3);
-        const jitter = () => (rnd() - 0.5) * 420;
-        const heat = 1 + bass * 1.4;
-        splat(0.015, yL, push, jitter(), [A[0] * heat, A[1] * heat, A[2] * heat]);
-        splat(0.985, yR, -push, jitter(), [B[0] * heat, B[1] * heat, B[2] * heat]);
+      const jitter = () => (rnd() - 0.5) * 420;
+      /* more fronts means more dye going in, so trim each one or four
+         sources fill the screen solid */
+      const share = 2 / Math.max(2, sources.length);
+      const heat = (1 + bass * 1.4) * (0.55 + share * 0.45);
+      for (let si = 0; si < sources.length; si++) {
+        const src = sources[si];
+        const col = src.colour || A;
+        const c3 = [col[0] * heat, col[1] * heat, col[2] * heat];
+        for (let i = 0; i < 2; i++) {
+          const w = wob(si * 3.3 + i);
+          if (src.edge === 'left')       splat(0.015, w, push, jitter(), c3);
+          else if (src.edge === 'right') splat(0.985, w, -push, jitter(), c3);
+          else if (src.edge === 'bottom') splat(w, 0.02, jitter(), push, c3);
+          else                            splat(w, 0.98, jitter(), -push, c3);
+        }
       }
     }
 
@@ -3455,6 +3475,241 @@ const FLUID = (() => {
   return { supported, init, resize, frame, reset, setQuality, QUALITY, CFG, get ready() { return ok; }, get failed() { return failed; } };
 })();
 window.FLUID = FLUID;
+
+</script>
+  <script>
+/* ============================================================
+   Pulse SPACE — the planets scene, drawn by the GPU.
+
+   One full-screen fragment shader does the lot: a layered
+   starfield with parallax, a drifting nebula built from fractal
+   noise, and shaded planets with banded surfaces, rings, glow
+   and a terminator. Everything is procedural, so there are no
+   textures to download and it stays sharp at any resolution.
+   ============================================================ */
+const SPACEGL = (() => {
+  let gl = null, canvas = null, prog = null, buf = null, ok = false, failed = false, u = {};
+  let t = 0;
+
+  const VERT = `#version 300 es
+  precision highp float;
+  in vec2 aPos;
+  out vec2 vPos;
+  void main() { vPos = aPos; gl_Position = vec4(aPos, 0.0, 1.0); }`;
+
+  const FRAG = `#version 300 es
+  precision highp float;
+  in vec2 vPos;
+  out vec4 outColor;
+
+  uniform vec2  uRes;
+  uniform float uTime;
+  uniform float uBass;
+  uniform float uBeat;
+  uniform vec3  uC1, uC2, uC3;
+  uniform float uPlanets;
+
+  /* ---- noise ---- */
+  float hash(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+  }
+  float noise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    vec2 u2 = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1, 0)), u2.x),
+               mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u2.x), u2.y);
+  }
+  float fbm(vec2 p) {
+    float v = 0.0, a = 0.5;
+    for (int i = 0; i < 6; i++) { v += a * noise(p); p *= 2.03; a *= 0.5; }
+    return v;
+  }
+
+  /* ---- stars: a hashed grid, one star per cell, sized by depth ---- */
+  vec3 stars(vec2 uv, float depth, float density, float drift) {
+    vec2 p = uv * density + vec2(uTime * drift, uTime * drift * 0.22);
+    vec2 i = floor(p), f = fract(p);
+    vec3 acc = vec3(0.0);
+    for (int y = -1; y <= 1; y++) {
+      for (int x = -1; x <= 1; x++) {
+        vec2 g = vec2(float(x), float(y));
+        float h = hash(i + g);
+        if (h < 0.86) continue;                       /* most cells are empty */
+        vec2 pos = g + vec2(hash(i + g + 3.1), hash(i + g + 7.7)) - f;
+        float d = length(pos);
+        float tw = 0.55 + 0.45 * sin(uTime * 2.6 + h * 40.0);
+        float bright = smoothstep(0.10, 0.0, d) * (h - 0.86) / 0.14;
+        /* faintly coloured stars read as more real than pure white */
+        vec3 tint = mix(vec3(0.75, 0.85, 1.0), vec3(1.0, 0.88, 0.75), hash(i + g + 11.3));
+        acc += tint * bright * tw * depth * (0.85 + uBeat * 0.5);
+      }
+    }
+    return acc;
+  }
+
+  /* ---- one planet, drawn as a shaded disc ---- */
+  vec3 planet(vec2 uv, float idx, inout float cover) {
+    float h1 = hash(vec2(idx, 1.7)), h2 = hash(vec2(idx, 4.3)), h3 = hash(vec2(idx, 9.1));
+    float orbit = 0.30 + h1 * 0.55;
+    float speed = (0.045 + h2 * 0.075) * (idx > 1.5 ? -1.0 : 1.0);
+    float ang = uTime * speed + h3 * 6.283;
+    vec2 c = vec2(cos(ang) * orbit * 1.15, sin(ang) * orbit * 0.55);
+    float r = (0.055 + h2 * 0.075) * (1.0 + uBass * 0.10);
+
+    vec2 d = uv - c;
+    vec3 col = vec3(0.0);
+    /* decorrelated mixes so neighbouring planets do not come out the same
+       colour when the palette only has a couple of stops */
+    float m1 = fract(h1 * 3.73 + idx * 0.41);
+    float m2 = fract(h2 * 5.31 + idx * 0.77);
+    vec3 base = mix(mix(uC1, uC2, m1), uC3, m2);
+    base = mix(base, base.zxy, step(0.66, fract(h3 * 7.1)) * 0.55);
+
+    /* ring first, so the planet body covers its near side */
+    if (h3 > 0.45) {
+      float tilt = (h1 - 0.5) * 1.3;
+      vec2 rp = vec2(d.x * cos(tilt) - d.y * sin(tilt), (d.x * sin(tilt) + d.y * cos(tilt)) / 0.28);
+      float rr = length(rp);
+      float ring = smoothstep(r * 2.35, r * 2.1, rr) * smoothstep(r * 1.45, r * 1.65, rr);
+      /* banding across the ring */
+      ring *= 0.55 + 0.45 * sin(rr / r * 26.0);
+      col += base * ring * 0.75;
+    }
+
+    float dd = length(d);
+    float edge = smoothstep(r, r * 0.985, dd);
+    if (edge > 0.001) {
+      /* fake the sphere: z from the disc equation gives a real normal */
+      float z = sqrt(max(0.0, r * r - dd * dd)) / r;
+      vec3 n = normalize(vec3(d / r, z));
+      vec3 lightDir = normalize(vec3(-0.55, 0.42, 0.72));
+      float lam = max(0.0, dot(n, lightDir));
+      /* surface: latitude bands warped by noise, like gas giants */
+      vec2 sp = vec2(atan(n.y, n.x) * 0.5, n.y * 2.6 + idx * 5.0);
+      float bands = fbm(sp * 3.0 + vec2(uTime * 0.04, 0.0));
+      bands = 0.65 + 0.5 * sin(n.y * 9.0 + bands * 4.2 + idx);
+      vec3 body = base * (0.35 + 0.65 * bands);
+      col += body * (0.10 + lam * 1.25) * edge;
+      /* rim light so it separates from the black */
+      float rim = pow(1.0 - z, 3.0) * lam;
+      col += base * rim * 0.7 * edge;
+      cover = max(cover, edge);
+    }
+
+    /* atmosphere glow */
+    float glow = exp(-max(0.0, dd - r) / (r * 0.55)) * 0.30;
+    col += base * glow * (0.7 + uBass * 0.6);
+    return col;
+  }
+
+  void main() {
+    float aspect = uRes.x / uRes.y;
+    vec2 uv = vPos;
+    uv.x *= aspect;
+
+    vec3 col = vec3(0.0);
+
+    /* deep field wash */
+    float vign = 1.0 - 0.55 * length(vPos * vec2(0.75, 0.95));
+    col += mix(vec3(0.012, 0.012, 0.035), vec3(0.05, 0.04, 0.10), vign) * vign;
+
+    /* nebula: two fbm layers drifting at different rates */
+    vec2 np = uv * 1.15 + vec2(uTime * 0.012, uTime * 0.006);
+    float n1 = fbm(np);
+    float n2 = fbm(np * 1.9 - vec2(uTime * 0.018, 0.0));
+    float neb = pow(max(0.0, n1 * 1.25 - 0.35), 2.0) * 1.5;
+    float neb2 = pow(max(0.0, n2 * 1.2 - 0.45), 2.2) * 1.2;
+    col += mix(uC1, uC3, clamp(n2, 0.0, 1.0)) * neb * (0.30 + uBass * 0.30);
+    col += mix(uC2, uC3, clamp(n1, 0.0, 1.0)) * neb2 * (0.18 + uBass * 0.22);
+
+    /* three star layers, near ones drifting faster */
+    col += stars(uv, 0.55, 22.0, 0.010);
+    col += stars(uv, 0.85, 42.0, 0.020);
+    col += stars(uv, 1.00, 78.0, 0.036);
+
+    /* planets, nearest last so they overlap correctly enough */
+    float cover = 0.0;
+    for (int i = 0; i < 5; i++) {
+      if (float(i) >= uPlanets) break;
+      col += planet(uv, float(i), cover);
+    }
+
+    /* tone: soft shoulder, keeps stars from blowing out */
+    col = col / (1.0 + col * 0.45);
+    outColor = vec4(col, 1.0);
+  }`;
+
+  function compile(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.warn('space shader', gl.getShaderInfoLog(s)); return null; }
+    return s;
+  }
+
+  function supported() {
+    if (ok) return true;
+    if (failed) return false;
+    try {
+      const c = document.createElement('canvas');
+      return !!c.getContext('webgl2');
+    } catch (e) { return false; }
+  }
+
+  function init(cv) {
+    if (ok) return true;
+    if (failed) return false;
+    canvas = cv;
+    gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false, powerPreference: 'high-performance' });
+    if (!gl) { failed = true; return false; }
+    const v = compile(gl.VERTEX_SHADER, VERT), f = compile(gl.FRAGMENT_SHADER, FRAG);
+    if (!v || !f) { failed = true; return false; }
+    prog = gl.createProgram();
+    gl.attachShader(prog, v); gl.attachShader(prog, f);
+    gl.bindAttribLocation(prog, 0, 'aPos');
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) { console.warn('space link', gl.getProgramInfoLog(prog)); failed = true; return false; }
+    ['uRes', 'uTime', 'uBass', 'uBeat', 'uC1', 'uC2', 'uC3', 'uPlanets']
+      .forEach((n) => { u[n] = gl.getUniformLocation(prog, n); });
+    buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    ok = true;
+    return true;
+  }
+
+  function frame(dt, opts) {
+    if (!ok) return false;
+    const o = opts || {};
+    t += dt * (o.speed === undefined ? 1 : o.speed);
+    const dpr = Math.min(1.5, window.devicePixelRatio || 1);
+    const r = canvas.getBoundingClientRect();
+    const w = Math.max(1, Math.round(r.width * dpr)), h = Math.max(1, Math.round(r.height * dpr));
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    gl.viewport(0, 0, w, h);
+    gl.useProgram(prog);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    gl.uniform2f(u.uRes, w, h);
+    gl.uniform1f(u.uTime, t);
+    gl.uniform1f(u.uBass, o.bass || 0);
+    gl.uniform1f(u.uBeat, o.beat || 0);
+    const c1 = o.c1 || [0.45, 0.62, 1.0], c2 = o.c2 || [1.0, 0.55, 0.3], c3 = o.c3 || [0.65, 0.4, 1.0];
+    gl.uniform3f(u.uC1, c1[0], c1[1], c1[2]);
+    gl.uniform3f(u.uC2, c2[0], c2[1], c2[2]);
+    gl.uniform3f(u.uC3, c3[0], c3[1], c3[2]);
+    gl.uniform1f(u.uPlanets, o.planets || 4);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    return true;
+  }
+
+  return { supported, init, frame, get ready() { return ok; }, get failed() { return failed; } };
+})();
+window.SPACEGL = SPACEGL;
 
 </script>
   <script>
@@ -3674,6 +3929,8 @@ const FX = (() => {
     if (blocker) {
       const gcv = $('vizGL');
       if (gcv && !gcv.classList.contains('hidden')) { gcv.classList.add('hidden'); FL.on = false; }
+      const scv = $('vizSky');
+      if (scv && !scv.classList.contains('hidden')) { scv.classList.add('hidden'); SK.on = false; }
       V.canvases.forEach((c) => { clearCanvas(c); if (blocker !== 'hidden') noteOnCanvas(c, blocker); });
       return;
     }
@@ -3725,6 +3982,7 @@ const FX = (() => {
 
     tickClock();
     stepFluid(low);
+    stepSky(low);
     V.canvases.forEach((c) => paint(c, out, low));
     return;
   }
@@ -3783,6 +4041,9 @@ const FX = (() => {
     barPlace: 'bottom',     // bottom | middle | full — where the bars sit on the full screen
     smokeA: '#ff6a1a', smokeB: '#1f8cff',   // the two smoke fronts
     smokeDetail: 'fine',    // soft | fine | ultra — resolution and particle count
+    smokeSpeed: 50,         // 0-100, how fast everything moves
+    smokeCount: 2,          // how many smoke fronts, 2 to 4
+    smokeC: '#25e5a7', smokeD: '#c85cff',   // the third and fourth fronts
     orient: 'auto'          // auto | landscape | portrait (full-screen view)
   };
   const STYLE_PRESETS = {
@@ -3881,6 +4142,7 @@ const FX = (() => {
     SM.puffs.push(p);
   }
   function drawSmoke(ctx, w, h, bass, dt) {
+    dt *= speedFactor();
     SM.t += dt;
     if (!SM.off) SM.off = document.createElement('canvas');
     /* deliberately coarse: upscaling is what makes it look like smoke */
@@ -4069,6 +4331,7 @@ const FX = (() => {
   }
 
   function smokeStep(ctx, w, h, bass, dt) {
+    dt *= speedFactor();
     RS.t += dt * 0.11;
     /* Detail is a straight trade: the buffer resolution decides how fine a
        wisp can be at all, the particle count decides how much structure
@@ -4165,6 +4428,23 @@ const FX = (() => {
     const g = gain || 1;
     return [((n >> 16) & 255) / 255 * g, ((n >> 8) & 255) / 255 * g, (n & 255) / 255 * g];
   }
+  /* 0-100 maps to a quarter speed at the bottom and three times at the top,
+     with 50 sitting at the natural rate */
+  function speedFactor() {
+    const v = style().smokeSpeed;
+    const n = (v === undefined ? 50 : Math.max(0, Math.min(100, +v))) / 50;
+    return n < 1 ? 0.25 + n * 0.75 : 1 + (n - 1) * 2;
+  }
+  function smokeSources() {
+    const st = style();
+    const n = Math.max(2, Math.min(4, +st.smokeCount || 2));
+    const edges = ['left', 'right', 'bottom', 'top'];
+    const cols = [st.smokeA || '#ff6a1a', st.smokeB || '#1f8cff', st.smokeC || '#25e5a7', st.smokeD || '#c85cff'];
+    const out = [];
+    for (let i = 0; i < n; i++) out.push({ edge: edges[i], colour: hexToRgbArr(cols[i], 0.55) });
+    return out;
+  }
+
   function fluidWanted() {
     return style().bg === 'fluid' && window.VIZFULL && VIZFULL.isOpen() && !!$('vizGL');
   }
@@ -4222,12 +4502,40 @@ const FX = (() => {
     const r = cv.getBoundingClientRect();
     FLUID.resize(Math.max(1, r.width), Math.max(1, r.height));
     const gain = 0.55;
+    void gain;
     FLUID.frame(Math.min(0.033, V.dt || 0.016), {
       bass,
       beat: V.beat,
+      speed: speedFactor(),
+      sources: smokeSources(),
       colourA: hexToRgbArr(st.smokeA || '#ff6a1a', gain),
       colourB: hexToRgbArr(st.smokeB || '#1f8cff', gain)
     });
+  }
+
+  /* ---------- GPU space ---------- */
+  const SK = { on: false };
+  function skyWanted() {
+    return style().bg === 'space' && window.VIZFULL && VIZFULL.isOpen() && !!$('vizSky')
+      && window.SPACEGL && SPACEGL.supported() && !SPACEGL.failed;
+  }
+  function stepSky(bass) {
+    const cv = $('vizSky');
+    if (!cv) return false;
+    if (!skyWanted()) {
+      if (SK.on) { cv.classList.add('hidden'); SK.on = false; }
+      return false;
+    }
+    if (!SPACEGL.ready && !SPACEGL.init(cv)) { return false; }
+    if (!SK.on) { cv.classList.remove('hidden'); SK.on = true; }
+    const stops = paletteStops();
+    const pick = (i) => hexToRgbArr(stops[Math.min(i, stops.length - 1)], 1);
+    SPACEGL.frame(Math.min(0.033, V.dt || 0.016), {
+      bass, beat: V.beat, speed: speedFactor(),
+      c1: pick(0), c2: pick(1), c3: pick(2),
+      planets: Math.max(2, Math.min(5, (+style().smokeCount || 2) + 2))
+    });
+    return true;
   }
 
   /* ---------- space: parallax stars and slow planets ---------- */
@@ -4259,7 +4567,7 @@ const FX = (() => {
   }
   function drawSpace(ctx, w, h, bass, dt) {
     spaceInit();
-    SP.t += dt * (1 + bass * 1.1);          /* the whole system speeds up on loud parts */
+    SP.t += dt * (1 + bass * 1.1) * speedFactor();          /* the whole system speeds up on loud parts */
     const cx = w / 2, cy = h / 2, R = Math.min(w, h);
 
     /* deep background wash */
@@ -4377,7 +4685,7 @@ const FX = (() => {
     else if (st.bg === 'smoke') { ctx.fillStyle = '#05040a'; ctx.fillRect(0, 0, w, h); drawSmoke(ctx, w, h, bass, dt); }
     else if (st.bg === 'grid') drawGrid(ctx, w, h, bass, dt);
     else if (st.bg === 'police') drawPolice(ctx, w, h, bass, dt);
-    else if (st.bg === 'space') drawSpace(ctx, w, h, bass, dt);
+    else if (st.bg === 'space') { if (!skyWanted()) drawSpace(ctx, w, h, bass, dt); }
   }
 
   /* ---------- shapes ---------- */
@@ -5075,8 +5383,16 @@ const FX = (() => {
       <div class="colour-row" id="stSmokeRow" style="${(st.bg === 'realsmoke' || st.bg === 'smoke' || st.bg === 'fluid') ? '' : 'display:none'}">
         <label>Smoke 1 <input type="color" id="stSmokeA" value="${st.smokeA || '#ff6a1a'}"></label>
         <label>Smoke 2 <input type="color" id="stSmokeB" value="${st.smokeB || '#1f8cff'}"></label>
+        <label class="sm3" style="${(+st.smokeCount || 2) >= 3 ? '' : 'display:none'}">Smoke 3 <input type="color" id="stSmokeC" value="${st.smokeC || '#25e5a7'}"></label>
+        <label class="sm4" style="${(+st.smokeCount || 2) >= 4 ? '' : 'display:none'}">Smoke 4 <input type="color" id="stSmokeD" value="${st.smokeD || '#c85cff'}"></label>
         <button class="chip" id="stSmokeSwap">Swap</button>
       </div>
+      <label class="slider-row" id="stCountRow" style="${(st.bg === 'realsmoke' || st.bg === 'fluid') ? '' : 'display:none'}">How many fronts
+        <select id="stSmokeCount">
+          ${[[2, 'two — left and right'], [3, 'three — plus one from the bottom'], [4, 'four — from all sides']]
+            .map(([v, l]) => `<option value="${v}" ${(+st.smokeCount || 2) === v ? 'selected' : ''}>${l}</option>`).join('')}
+        </select></label>
+      ${slider('stSpeed', 'Movement speed', 0, 100, 1, st.smokeSpeed === undefined ? 50 : st.smokeSpeed, '')}
       <label class="slider-row" id="stDetailRow" style="${(st.bg === 'realsmoke' || st.bg === 'fluid') ? '' : 'display:none'}">Smoke detail
         <select id="stDetail">
           ${[['soft', 'soft — easiest on the battery'], ['fine', 'fine — sharp wisps'], ['ultra', 'ultra — finest, works the phone hardest']]
@@ -5215,12 +5531,27 @@ const FX = (() => {
       if (r) r.style.display = (style().bg === 'realsmoke' || style().bg === 'smoke' || style().bg === 'fluid') ? '' : 'none';
       const d = $('stDetailRow');
       if (d) d.style.display = (style().bg === 'realsmoke' || style().bg === 'fluid') ? '' : 'none';
+      const cr = $('stCountRow');
+      if (cr) cr.style.display = (style().bg === 'realsmoke' || style().bg === 'fluid') ? '' : 'none';
     });
     stBind('stDetail', 'smokeDetail', () => { RS.parts.length = 0; });
-    ['stSmokeA', 'stSmokeB'].forEach((id, i) => {
+    ['stSmokeA', 'stSmokeB', 'stSmokeC', 'stSmokeD'].forEach((id, i) => {
       const n = $(id); if (!n) return;
-      n.oninput = () => { style()[i ? 'smokeB' : 'smokeA'] = n.value; save(); };
+      const key = ['smokeA', 'smokeB', 'smokeC', 'smokeD'][i];
+      n.oninput = () => { style()[key] = n.value; save(); };
     });
+    const cnt = $('stSmokeCount');
+    if (cnt) cnt.onchange = () => {
+      style().smokeCount = +cnt.value; save();
+      els('.sm3').forEach((e) => e.style.display = +cnt.value >= 3 ? '' : 'none');
+      els('.sm4').forEach((e) => e.style.display = +cnt.value >= 4 ? '' : 'none');
+    };
+    const spd2 = $('stSpeed');
+    if (spd2) spd2.oninput = () => {
+      style().smokeSpeed = +spd2.value; save();
+      const lab = $('stSpeedv');
+      if (lab) lab.textContent = spd2.value === '50' ? 'normal' : (+spd2.value < 50 ? spd2.value + ' · slower' : spd2.value + ' · faster');
+    };
     const swp = $('stSmokeSwap');
     if (swp) swp.onclick = () => {
       const st2 = style();
