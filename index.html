@@ -480,6 +480,11 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
 .rn-row s{color:var(--mut)}
 .rn-row b{color:var(--txt)}
 
+/* ---- GPU fluid layer, behind the bars ---- */
+#vizGL{position:absolute;inset:0;width:100%;height:100%;display:block;z-index:0}
+#vizGL.hidden{display:none}
+#vizFull #vizBig{position:relative;z-index:1}
+
 </style>
 </head>
 <body>
@@ -957,6 +962,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
 
   <!-- ── Full-screen visualizer ─────────────────────────────── -->
   <section id="vizFull">
+    <canvas id="vizGL" class="hidden"></canvas>
     <canvas id="vizBig"></canvas>
     <button class="icon-btn vf-x" id="vfClose" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     <div class="vf-hint" id="vfHint">tap anywhere to leave</div>
@@ -988,7 +994,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '8.5.0';
+const APP_VERSION = '9.0.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -3000,6 +3006,459 @@ boot();
 </script>
 <script>
 /* ============================================================
+   Pulse FLUID — a real fluid simulation on the GPU.
+
+   This is the textbook stable-fluids method (Stam 1999) run
+   entirely in fragment shaders:
+
+     1. advect the velocity field along itself
+     2. add vorticity confinement, which puts back the small
+        curls that numerical diffusion eats — this is what makes
+        it look like smoke rather than paint
+     3. compute divergence, solve for pressure with a few Jacobi
+        iterations, subtract the pressure gradient so the field
+        becomes incompressible
+     4. advect the dye (the coloured smoke) through that field
+
+   Everything lives in floating-point textures and never touches
+   the CPU, so a phone can run it at 60fps where the particle
+   version could not.
+   ============================================================ */
+const FLUID = (() => {
+  let gl = null, canvas = null, ok = false, failed = false;
+  let progs = {}, vao = null, quadBuf = null;
+  let velocity = null, dye = null, divergence = null, curlTex = null, pressure = null;
+  let simW = 0, simH = 0, dyeW = 0, dyeH = 0, texType = 0;
+  let t = 0, seed = 3, injectAcc = 0;
+
+  /* three quality steps; the watchdog in fx.js walks down these if a phone
+     cannot keep up, rather than letting the frame rate rot */
+  const QUALITY = {
+    soft:  { simRes: 96,  dyeRes: 320, pressureIters: 12 },
+    fine:  { simRes: 128, dyeRes: 512, pressureIters: 18 },
+    ultra: { simRes: 160, dyeRes: 720, pressureIters: 24 }
+  };
+  function setQuality(name) {
+    const q = QUALITY[name] || QUALITY.fine;
+    if (CFG.simRes === q.simRes && CFG.dyeRes === q.dyeRes) return false;
+    CFG.simRes = q.simRes; CFG.dyeRes = q.dyeRes; CFG.pressureIters = q.pressureIters;
+    simW = simH = dyeW = dyeH = 0;      /* force the buffers to be rebuilt */
+    return true;
+  }
+
+  const CFG = {
+    simRes: 128,          // velocity grid on the short side
+    dyeRes: 512,          // dye grid on the short side — this is the detail you see
+    pressureIters: 18,
+    velDissipation: 0.32,
+    dyeDissipation: 1.15,
+    curl: 34,             // vorticity confinement strength
+    radius: 0.0016
+  };
+
+  /* ---------- shader plumbing ---------- */
+  const VERT = `#version 300 es
+  precision highp float;
+  in vec2 aPos;
+  out vec2 vUv, vL, vR, vT, vB;
+  uniform vec2 texelSize;
+  void main() {
+    vUv = aPos * 0.5 + 0.5;
+    vL = vUv - vec2(texelSize.x, 0.0);
+    vR = vUv + vec2(texelSize.x, 0.0);
+    vT = vUv + vec2(0.0, texelSize.y);
+    vB = vUv - vec2(0.0, texelSize.y);
+    gl_Position = vec4(aPos, 0.0, 1.0);
+  }`;
+
+  const F_HEAD = `#version 300 es
+  precision highp float;
+  precision highp sampler2D;
+  in vec2 vUv, vL, vR, vT, vB;
+  out vec4 outColor;
+  `;
+
+  const SH = {
+    /* semi-Lagrangian advection: look back along the velocity and fetch */
+    advect: F_HEAD + `
+      uniform sampler2D uVelocity, uSource;
+      uniform vec2 texelSize, dyeTexelSize;
+      uniform float dt, dissipation;
+      vec4 bilerp(sampler2D s, vec2 uv, vec2 tsize) {
+        vec2 st = uv / tsize - 0.5;
+        vec2 iuv = floor(st), fuv = fract(st);
+        vec4 a = texture(s, (iuv + vec2(0.5, 0.5)) * tsize);
+        vec4 b = texture(s, (iuv + vec2(1.5, 0.5)) * tsize);
+        vec4 c = texture(s, (iuv + vec2(0.5, 1.5)) * tsize);
+        vec4 d = texture(s, (iuv + vec2(1.5, 1.5)) * tsize);
+        return mix(mix(a, b, fuv.x), mix(c, d, fuv.x), fuv.y);
+      }
+      void main() {
+        vec2 coord = vUv - dt * texture(uVelocity, vUv).xy * texelSize;
+        outColor = bilerp(uSource, coord, dyeTexelSize) / (1.0 + dissipation * dt);
+      }`,
+
+    divergence: F_HEAD + `
+      uniform sampler2D uVelocity;
+      void main() {
+        float L = texture(uVelocity, vL).x;
+        float R = texture(uVelocity, vR).x;
+        float T = texture(uVelocity, vT).y;
+        float B = texture(uVelocity, vB).y;
+        vec2 C = texture(uVelocity, vUv).xy;
+        /* solid walls: mirror the normal component at the edges */
+        if (vL.x < 0.0) L = -C.x;
+        if (vR.x > 1.0) R = -C.x;
+        if (vT.y > 1.0) T = -C.y;
+        if (vB.y < 0.0) B = -C.y;
+        outColor = vec4(0.5 * (R - L + T - B), 0.0, 0.0, 1.0);
+      }`,
+
+    curl: F_HEAD + `
+      uniform sampler2D uVelocity;
+      void main() {
+        float L = texture(uVelocity, vL).y;
+        float R = texture(uVelocity, vR).y;
+        float T = texture(uVelocity, vT).x;
+        float B = texture(uVelocity, vB).x;
+        outColor = vec4(0.5 * (R - L - T + B), 0.0, 0.0, 1.0);
+      }`,
+
+    /* push velocity along the gradient of |curl| — restores the small eddies */
+    vorticity: F_HEAD + `
+      uniform sampler2D uVelocity, uCurl;
+      uniform float curlAmount, dt;
+      void main() {
+        float L = texture(uCurl, vL).x;
+        float R = texture(uCurl, vR).x;
+        float T = texture(uCurl, vT).x;
+        float B = texture(uCurl, vB).x;
+        float C = texture(uCurl, vUv).x;
+        vec2 force = 0.5 * vec2(abs(T) - abs(B), abs(R) - abs(L));
+        force /= length(force) + 0.0001;
+        force *= curlAmount * C;
+        force.y *= -1.0;
+        vec2 vel = texture(uVelocity, vUv).xy;
+        vel += force * dt;
+        outColor = vec4(clamp(vel, -1000.0, 1000.0), 0.0, 1.0);
+      }`,
+
+    pressure: F_HEAD + `
+      uniform sampler2D uPressure, uDivergence;
+      void main() {
+        float L = texture(uPressure, vL).x;
+        float R = texture(uPressure, vR).x;
+        float T = texture(uPressure, vT).x;
+        float B = texture(uPressure, vB).x;
+        float div = texture(uDivergence, vUv).x;
+        outColor = vec4((L + R + B + T - div) * 0.25, 0.0, 0.0, 1.0);
+      }`,
+
+    gradient: F_HEAD + `
+      uniform sampler2D uPressure, uVelocity;
+      void main() {
+        float L = texture(uPressure, vL).x;
+        float R = texture(uPressure, vR).x;
+        float T = texture(uPressure, vT).x;
+        float B = texture(uPressure, vB).x;
+        vec2 vel = texture(uVelocity, vUv).xy;
+        vel -= vec2(R - L, T - B);
+        outColor = vec4(vel, 0.0, 1.0);
+      }`,
+
+    splat: F_HEAD + `
+      uniform sampler2D uTarget;
+      uniform float aspectRatio, radius;
+      uniform vec3 color;
+      uniform vec2 point;
+      void main() {
+        vec2 p = vUv - point;
+        p.x *= aspectRatio;
+        vec3 splat = exp(-dot(p, p) / radius) * color;
+        vec3 base = texture(uTarget, vUv).xyz;
+        outColor = vec4(base + splat, 1.0);
+      }`,
+
+    clear: F_HEAD + `
+      uniform sampler2D uTexture;
+      uniform float value;
+      void main() { outColor = value * texture(uTexture, vUv); }`,
+
+    /* a little tone shaping so the dye reads as lit smoke on black */
+    display: F_HEAD + `
+      uniform sampler2D uTexture;
+      uniform float exposure;
+      void main() {
+        vec3 c = texture(uTexture, vUv).rgb * exposure;
+        c = max(c, 0.0);
+        /* soft shoulder: keeps dense cores from clipping to white */
+        c = c / (1.0 + c * 0.55);
+        float a = clamp(max(c.r, max(c.g, c.b)) * 1.35, 0.0, 1.0);
+        outColor = vec4(c, a);
+      }`
+  };
+
+  function compile(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.warn('fluid shader', gl.getShaderInfoLog(s));
+      return null;
+    }
+    return s;
+  }
+  function program(fragSrc) {
+    const v = compile(gl.VERTEX_SHADER, VERT);
+    const f = compile(gl.FRAGMENT_SHADER, fragSrc);
+    if (!v || !f) return null;
+    const p = gl.createProgram();
+    gl.attachShader(p, v); gl.attachShader(p, f);
+    gl.bindAttribLocation(p, 0, 'aPos');
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { console.warn('fluid link', gl.getProgramInfoLog(p)); return null; }
+    const u = {};
+    const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+    for (let i = 0; i < n; i++) {
+      const name = gl.getActiveUniform(p, i).name;
+      u[name] = gl.getUniformLocation(p, name);
+    }
+    return { p, u };
+  }
+
+  function makeFBO(w, h, internal, format, type, filter) {
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, internal, w, h, 0, format, type, null);
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) return null;
+    gl.viewport(0, 0, w, h);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    return { tex, fbo, w, h, texelX: 1 / w, texelY: 1 / h,
+      attach(id) { gl.activeTexture(gl.TEXTURE0 + id); gl.bindTexture(gl.TEXTURE_2D, tex); return id; } };
+  }
+  function makeDouble(w, h, internal, format, type, filter) {
+    let a = makeFBO(w, h, internal, format, type, filter);
+    let b = makeFBO(w, h, internal, format, type, filter);
+    if (!a || !b) return null;
+    return {
+      w, h, texelX: 1 / w, texelY: 1 / h,
+      get read() { return a; }, get write() { return b; },
+      swap() { const tmp = a; a = b; b = tmp; }
+    };
+  }
+
+  function blit(target) {
+    if (target) { gl.viewport(0, 0, target.w, target.h); gl.bindFramebuffer(gl.FRAMEBUFFER, target.fbo); }
+    else { gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight); gl.bindFramebuffer(gl.FRAMEBUFFER, null); }
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+  function use(prog, texelSource) {
+    gl.useProgram(prog.p);
+    if (prog.u.texelSize) gl.uniform2f(prog.u.texelSize, texelSource.texelX, texelSource.texelY);
+  }
+
+  /* ---------- lifecycle ---------- */
+  function supported() {
+    if (failed) return false;
+    if (ok) return true;
+    try {
+      const c = document.createElement('canvas');
+      const g = c.getContext('webgl2', { alpha: true, antialias: false, depth: false, stencil: false });
+      if (!g) return false;
+      return !!(g.getExtension('EXT_color_buffer_float') || g.getExtension('EXT_color_buffer_half_float'));
+    } catch (e) { return false; }
+  }
+
+  function init(cv) {
+    if (ok) return true;
+    if (failed) return false;
+    canvas = cv;
+    gl = canvas.getContext('webgl2', {
+      alpha: true, antialias: false, depth: false, stencil: false,
+      premultipliedAlpha: false, preserveDrawingBuffer: false, powerPreference: 'high-performance'
+    });
+    if (!gl) { failed = true; return false; }
+    const full = gl.getExtension('EXT_color_buffer_float');
+    const half = gl.getExtension('EXT_color_buffer_half_float');
+    gl.getExtension('OES_texture_float_linear');
+    gl.getExtension('OES_texture_half_float_linear');
+    if (!full && !half) { failed = true; return false; }
+    texType = full ? gl.FLOAT : gl.HALF_FLOAT;
+
+    for (const k of Object.keys(SH)) {
+      progs[k] = program(SH[k]);
+      if (!progs[k]) { failed = true; return false; }
+    }
+
+    quadBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.BLEND);
+    ok = true;
+    return true;
+  }
+
+  function resize(w, h) {
+    if (!ok) return;
+    const dpr = Math.min(1.25, window.devicePixelRatio || 1);
+    const cw = Math.max(1, Math.round(w * dpr)), ch = Math.max(1, Math.round(h * dpr));
+    if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
+    const ar = cw / ch;
+    const sW = ar > 1 ? Math.round(CFG.simRes * ar) : CFG.simRes;
+    const sH = ar > 1 ? CFG.simRes : Math.round(CFG.simRes / ar);
+    const dW = ar > 1 ? Math.round(CFG.dyeRes * ar) : CFG.dyeRes;
+    const dH = ar > 1 ? CFG.dyeRes : Math.round(CFG.dyeRes / ar);
+    if (sW === simW && sH === simH && dW === dyeW && dH === dyeH) return;
+    simW = sW; simH = sH; dyeW = dW; dyeH = dH;
+    const lin = gl.LINEAR;
+    velocity = makeDouble(simW, simH, gl.RG16F, gl.RG, texType, lin);
+    dye = makeDouble(dyeW, dyeH, gl.RGBA16F, gl.RGBA, texType, lin);
+    divergence = makeFBO(simW, simH, gl.R16F, gl.RED, texType, gl.NEAREST);
+    curlTex = makeFBO(simW, simH, gl.R16F, gl.RED, texType, gl.NEAREST);
+    pressure = makeDouble(simW, simH, gl.R16F, gl.RED, texType, gl.NEAREST);
+    if (!velocity || !dye || !divergence || !curlTex || !pressure) { failed = true; ok = false; }
+  }
+
+  /* ---------- injection ---------- */
+  function splat(x, y, dx, dy, colour) {
+    use(progs.splat, velocity);
+    gl.uniform1i(progs.splat.u.uTarget, velocity.read.attach(0));
+    gl.uniform1f(progs.splat.u.aspectRatio, canvas.width / canvas.height);
+    gl.uniform2f(progs.splat.u.point, x, y);
+    gl.uniform3f(progs.splat.u.color, dx, dy, 0);
+    gl.uniform1f(progs.splat.u.radius, CFG.radius);
+    blit(velocity.write); velocity.swap();
+
+    gl.uniform1i(progs.splat.u.uTarget, dye.read.attach(0));
+    gl.uniform3f(progs.splat.u.color, colour[0], colour[1], colour[2]);
+    blit(dye.write); dye.swap();
+  }
+
+  function rnd() {
+    seed = (seed * 1664525 + 1013904223) % 4294967296;
+    return seed / 4294967296;
+  }
+
+  /* ---------- one frame ---------- */
+  function frame(dt, opts) {
+    if (!ok) return false;
+    const o = opts || {};
+    const bass = o.bass || 0, beat = o.beat || 0;
+    const A = o.colourA || [1, 0.35, 0.05], B = o.colourB || [0.1, 0.45, 1];
+    t += dt;
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    gl.disable(gl.BLEND);
+
+    /* feed the two fronts: streams from the left and right edges, wandering
+       up and down, pushed harder on the beat */
+    injectAcc += dt;
+    const every = 1 / 26;
+    while (injectAcc > every) {
+      injectAcc -= every;
+      const push = (0.5 + bass * 0.85 + beat * 0.65) * 1900;
+      const wob = (n) => 0.5 + 0.42 * Math.sin(t * (0.31 + n * 0.17) + n * 2.1) * Math.cos(t * 0.13 + n);
+      for (let i = 0; i < 2; i++) {
+        const yL = wob(i), yR = wob(i + 3.3);
+        const jitter = () => (rnd() - 0.5) * 420;
+        const heat = 1 + bass * 1.4;
+        splat(0.015, yL, push, jitter(), [A[0] * heat, A[1] * heat, A[2] * heat]);
+        splat(0.985, yR, -push, jitter(), [B[0] * heat, B[1] * heat, B[2] * heat]);
+      }
+    }
+
+    /* --- solve --- */
+    use(progs.curl, velocity);
+    gl.uniform1i(progs.curl.u.uVelocity, velocity.read.attach(0));
+    blit(curlTex);
+
+    use(progs.vorticity, velocity);
+    gl.uniform1i(progs.vorticity.u.uVelocity, velocity.read.attach(0));
+    gl.uniform1i(progs.vorticity.u.uCurl, curlTex.attach(1));
+    gl.uniform1f(progs.vorticity.u.curlAmount, CFG.curl * (1 + bass * 0.5));
+    gl.uniform1f(progs.vorticity.u.dt, dt);
+    blit(velocity.write); velocity.swap();
+
+    use(progs.divergence, velocity);
+    gl.uniform1i(progs.divergence.u.uVelocity, velocity.read.attach(0));
+    blit(divergence);
+
+    use(progs.clear, pressure);
+    gl.uniform1i(progs.clear.u.uTexture, pressure.read.attach(0));
+    gl.uniform1f(progs.clear.u.value, 0.8);
+    blit(pressure.write); pressure.swap();
+
+    use(progs.pressure, pressure);
+    gl.uniform1i(progs.pressure.u.uDivergence, divergence.attach(0));
+    for (let i = 0; i < CFG.pressureIters; i++) {
+      gl.uniform1i(progs.pressure.u.uPressure, pressure.read.attach(1));
+      blit(pressure.write); pressure.swap();
+    }
+
+    use(progs.gradient, velocity);
+    gl.uniform1i(progs.gradient.u.uPressure, pressure.read.attach(0));
+    gl.uniform1i(progs.gradient.u.uVelocity, velocity.read.attach(1));
+    blit(velocity.write); velocity.swap();
+
+    use(progs.advect, velocity);
+    gl.uniform2f(progs.advect.u.dyeTexelSize, velocity.texelX, velocity.texelY);
+    gl.uniform1i(progs.advect.u.uVelocity, velocity.read.attach(0));
+    gl.uniform1i(progs.advect.u.uSource, velocity.read.attach(0));
+    gl.uniform1f(progs.advect.u.dt, dt);
+    gl.uniform1f(progs.advect.u.dissipation, CFG.velDissipation);
+    blit(velocity.write); velocity.swap();
+
+    use(progs.advect, velocity);
+    gl.uniform2f(progs.advect.u.dyeTexelSize, dye.texelX, dye.texelY);
+    gl.uniform1i(progs.advect.u.uVelocity, velocity.read.attach(0));
+    gl.uniform1i(progs.advect.u.uSource, dye.read.attach(1));
+    gl.uniform1f(progs.advect.u.dt, dt);
+    gl.uniform1f(progs.advect.u.dissipation, CFG.dyeDissipation);
+    blit(dye.write); dye.swap();
+
+    /* --- to the screen --- */
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.useProgram(progs.display.p);
+    gl.uniform1i(progs.display.u.uTexture, dye.read.attach(0));
+    if (progs.display.u.exposure) gl.uniform1f(progs.display.u.exposure, 1.0 + bass * 0.35);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    return true;
+  }
+
+  function reset() {
+    if (!ok) return;
+    for (const d of [velocity, dye, pressure]) {
+      if (!d) continue;
+      for (const f of [d.read, d.write]) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, f.fbo);
+        gl.clearColor(0, 0, 0, 0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+      }
+    }
+  }
+
+  return { supported, init, resize, frame, reset, setQuality, QUALITY, CFG, get ready() { return ok; }, get failed() { return failed; } };
+})();
+window.FLUID = FLUID;
+
+</script>
+  <script>
+/* ============================================================
    Pulse FX — audio processing, visualizer, analysis, sensors,
    spoken cues and online artwork lookup.
    Loads after app.js and uses its globals (S, P, T, DB, $ …).
@@ -3213,6 +3672,8 @@ const FX = (() => {
     V.raf = requestAnimationFrame(drawViz);
     const blocker = vizBlocker();
     if (blocker) {
+      const gcv = $('vizGL');
+      if (gcv && !gcv.classList.contains('hidden')) { gcv.classList.add('hidden'); FL.on = false; }
       V.canvases.forEach((c) => { clearCanvas(c); if (blocker !== 'hidden') noteOnCanvas(c, blocker); });
       return;
     }
@@ -3263,6 +3724,7 @@ const FX = (() => {
     }
 
     tickClock();
+    stepFluid(low);
     V.canvases.forEach((c) => paint(c, out, low));
     return;
   }
@@ -3329,7 +3791,8 @@ const FX = (() => {
     Cyberpunk:      { shape: 'bars3d', palette: 'cyberpunk', bg: 'grid' },
     'Vice City':    { shape: 'mirror', palette: 'vice',      bg: 'police' },
     'Ice arc':      { shape: 'arc',    palette: 'ice',       bg: 'smoke' },
-    'Fire & ice':   { shape: 'bars3d', palette: 'custom',    bg: 'realsmoke', c1: '#ff3d2e', c2: '#ffb03a', c3: '#2ec5ff', smokeA: '#ff5a12', smokeB: '#2a7bff' },
+    'Fire & ice':   { shape: 'bars3d', palette: 'custom',    bg: 'fluid', c1: '#ff3d2e', c2: '#ffb03a', c3: '#2ec5ff', smokeA: '#ff5a12', smokeB: '#2a7bff' },
+    'Real smoke':   { shape: 'bars',   palette: 'accent',    bg: 'fluid' },
     'Smoke & 3D':   { shape: 'bars3d', palette: 'accent',    bg: 'realsmoke' },
     'Deep space':   { shape: 'bars',   palette: 'ice',       bg: 'space' },
     Nebula:         { shape: 'bars3d', palette: 'rainbow',   bg: 'space' }
@@ -3693,6 +4156,80 @@ const FX = (() => {
     ctx.restore();
   }
 
+  /* ---------- GPU fluid: the real smoke ---------- */
+  const FL = { on: false, warned: false };
+  function hexToRgbArr(hex, gain) {
+    const h = String(hex || '').replace('#', '');
+    const n = parseInt(h.length === 3 ? h.split('').map((c) => c + c).join('') : h, 16);
+    if (isNaN(n)) return [1, 1, 1];
+    const g = gain || 1;
+    return [((n >> 16) & 255) / 255 * g, ((n >> 8) & 255) / 255 * g, (n & 255) / 255 * g];
+  }
+  function fluidWanted() {
+    return style().bg === 'fluid' && window.VIZFULL && VIZFULL.isOpen() && !!$('vizGL');
+  }
+  function stepFluid(bass) {
+    const cv = $('vizGL');
+    if (!cv) return;
+    const want = fluidWanted();
+    if (!want) {
+      if (FL.on) { cv.classList.add('hidden'); FL.on = false; }
+      return;
+    }
+    if (!window.FLUID || !FLUID.supported()) {
+      if (!FL.warned) {
+        FL.warned = true;
+        style().bg = 'realsmoke'; save();
+        toast('This phone cannot run the GPU fluid — using the particle smoke');
+      }
+      return;
+    }
+    if (!FLUID.ready) {
+      if (!FLUID.init(cv)) {
+        style().bg = 'realsmoke'; save();
+        toast('GPU fluid failed to start — using the particle smoke');
+        return;
+      }
+    }
+    if (!FL.on) { cv.classList.remove('hidden'); FL.on = true; FL.slow = 0; FL.frames = 0; }
+    const st = style();
+    /* quality follows the same Smoke detail setting as the particle version */
+    if (FL.quality !== (st.smokeDetail || 'fine')) {
+      FL.quality = st.smokeDetail || 'fine';
+      FLUID.setQuality(FL.quality);
+    }
+    /* watchdog: if the phone cannot hold a usable frame rate, step down once,
+       then give up and go back to the particle smoke rather than stutter */
+    const dtNow = V.dt || 0.016;
+    FL.frames++;
+    if (FL.frames > 90) {                       /* ignore the first couple of seconds */
+      FL.slow = dtNow > 0.045 ? FL.slow + 1 : Math.max(0, FL.slow - 1);
+      if (FL.slow > 90) {
+        FL.slow = 0;
+        const order = ['ultra', 'fine', 'soft'];
+        const i = order.indexOf(FL.quality);
+        if (i < order.length - 1) {
+          st.smokeDetail = order[i + 1]; save();
+          toast('Smoke quality lowered to keep it smooth');
+        } else {
+          st.bg = 'realsmoke'; save();
+          cv.classList.add('hidden'); FL.on = false;
+          toast('This phone struggles with the GPU smoke — switched to the particle one');
+          return;
+        }
+      }
+    }
+    const r = cv.getBoundingClientRect();
+    FLUID.resize(Math.max(1, r.width), Math.max(1, r.height));
+    const gain = 0.55;
+    FLUID.frame(Math.min(0.033, V.dt || 0.016), {
+      bass,
+      beat: V.beat,
+      colourA: hexToRgbArr(st.smokeA || '#ff6a1a', gain),
+      colourB: hexToRgbArr(st.smokeB || '#1f8cff', gain)
+    });
+  }
+
   /* ---------- space: parallax stars and slow planets ---------- */
   const SP = { t: 0, stars: null, planets: null, seed: 7 };
   function srnd() {
@@ -3835,7 +4372,8 @@ const FX = (() => {
   }
   function drawBackground(ctx, w, h, bass, dt) {
     const st = style();
-    if (st.bg === 'realsmoke') { ctx.fillStyle = '#030308'; ctx.fillRect(0, 0, w, h); drawRealSmoke(ctx, w, h, bass, dt); }
+    if (st.bg === 'fluid') { /* painted by WebGL underneath — leave this canvas clear */ }
+    else if (st.bg === 'realsmoke') { ctx.fillStyle = '#030308'; ctx.fillRect(0, 0, w, h); drawRealSmoke(ctx, w, h, bass, dt); }
     else if (st.bg === 'smoke') { ctx.fillStyle = '#05040a'; ctx.fillRect(0, 0, w, h); drawSmoke(ctx, w, h, bass, dt); }
     else if (st.bg === 'grid') drawGrid(ctx, w, h, bass, dt);
     else if (st.bg === 'police') drawPolice(ctx, w, h, bass, dt);
@@ -4531,15 +5069,15 @@ const FX = (() => {
         </select></label>
       <label class="slider-row">Background
         <select id="stBg">
-          ${[['none', 'Plain black'], ['realsmoke', 'Colliding smoke'], ['smoke', 'Pixelised clouds'], ['space', 'Planets & stars'], ['grid', 'Neon grid'], ['police', 'Vice City police lights']]
+          ${[['none', 'Plain black'], ['fluid', 'Real smoke (GPU fluid)'], ['realsmoke', 'Colliding smoke'], ['smoke', 'Pixelised clouds'], ['space', 'Planets & stars'], ['grid', 'Neon grid'], ['police', 'Vice City police lights']]
             .map(([v, l]) => `<option value="${v}" ${st.bg === v ? 'selected' : ''}>${l}</option>`).join('')}
         </select></label>
-      <div class="colour-row" id="stSmokeRow" style="${(st.bg === 'realsmoke' || st.bg === 'smoke') ? '' : 'display:none'}">
+      <div class="colour-row" id="stSmokeRow" style="${(st.bg === 'realsmoke' || st.bg === 'smoke' || st.bg === 'fluid') ? '' : 'display:none'}">
         <label>Smoke 1 <input type="color" id="stSmokeA" value="${st.smokeA || '#ff6a1a'}"></label>
         <label>Smoke 2 <input type="color" id="stSmokeB" value="${st.smokeB || '#1f8cff'}"></label>
         <button class="chip" id="stSmokeSwap">Swap</button>
       </div>
-      <label class="slider-row" id="stDetailRow" style="${st.bg === 'realsmoke' ? '' : 'display:none'}">Smoke detail
+      <label class="slider-row" id="stDetailRow" style="${(st.bg === 'realsmoke' || st.bg === 'fluid') ? '' : 'display:none'}">Smoke detail
         <select id="stDetail">
           ${[['soft', 'soft — easiest on the battery'], ['fine', 'fine — sharp wisps'], ['ultra', 'ultra — finest, works the phone hardest']]
             .map(([v, l]) => `<option value="${v}" ${(st.smokeDetail || 'fine') === v ? 'selected' : ''}>${l}</option>`).join('')}
@@ -4674,9 +5212,9 @@ const FX = (() => {
     stBind('stPalette', 'palette', () => { const c = $('stCustom'); if (c) c.style.display = style().palette === 'custom' ? '' : 'none'; });
     stBind('stBg', 'bg', () => {
       const r = $('stSmokeRow');
-      if (r) r.style.display = (style().bg === 'realsmoke' || style().bg === 'smoke') ? '' : 'none';
+      if (r) r.style.display = (style().bg === 'realsmoke' || style().bg === 'smoke' || style().bg === 'fluid') ? '' : 'none';
       const d = $('stDetailRow');
-      if (d) d.style.display = style().bg === 'realsmoke' ? '' : 'none';
+      if (d) d.style.display = (style().bg === 'realsmoke' || style().bg === 'fluid') ? '' : 'none';
     });
     stBind('stDetail', 'smokeDetail', () => { RS.parts.length = 0; });
     ['stSmokeA', 'stSmokeB'].forEach((id, i) => {
