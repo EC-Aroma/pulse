@@ -475,6 +475,11 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
 .setgroups button{flex:1;text-align:center;padding:10px 8px;font-size:15px}
 .setgroup>.section-h:first-child{margin-top:10px}
 
+/* ---- rename preview ---- */
+.rn-row{padding:8px 0;border-top:1px solid var(--line);font-size:13px;line-height:1.45}
+.rn-row s{color:var(--mut)}
+.rn-row b{color:var(--txt)}
+
 </style>
 </head>
 <body>
@@ -692,6 +697,12 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
           <div id="storageInfo" class="card muted"></div>
           <button class="ghost wide" id="btnPersist">Ask Android to never evict my library</button>
 
+          <h3 class="section-h">Names &amp; tidying</h3>
+          <p class="hint">Rename one track from its &hellip; menu in the library. This does several at once &mdash; useful when a batch of files came in with rubbish names.</p>
+          <div class="row-btns">
+            <button class="primary" id="btnBulkRename">Rename several tracks</button>
+          </div>
+
           <div id="mixerApp"></div>
 
           <h3 class="section-h">App updates</h3>
@@ -874,6 +885,55 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
   </section>
 
   <!-- ── Generic list sheet (playlist picker etc.) ────────────── -->
+  <!-- Rename -->
+  <section id="renameSheet" class="sheet">
+    <div class="sh-head"><button class="text-btn" id="rnCancel">Cancel</button><b>Rename</b><button class="text-btn strong" id="rnSave">Save</button></div>
+    <div class="pad">
+      <label class="fld">Title<input id="rnTitle"></label>
+      <label class="fld">Artist<input id="rnArtist"></label>
+      <p class="hint">One-tap fixes &mdash; they only change what you see in Pulse, never the file on your phone.</p>
+      <div class="row-btns" style="padding:0">
+        <button class="ghost" data-rnfix="tidy">Tidy up</button>
+        <button class="ghost" data-rnfix="split">Split &ldquo;Artist &ndash; Title&rdquo;</button>
+        <button class="ghost" data-rnfix="caps">Capitalise Each Word</button>
+        <button class="ghost" data-rnfix="fromfile">Use the file name</button>
+      </div>
+      <p class="hint" id="rnPreview"></p>
+    </div>
+  </section>
+
+  <!-- Bulk rename -->
+  <section id="bulkSheet" class="sheet">
+    <div class="sh-head"><button class="text-btn" id="blCancel">Close</button><b>Rename several</b><button class="text-btn strong" id="blApply">Apply</button></div>
+    <div class="pad">
+      <label class="fld">Which tracks
+        <select id="blScope">
+          <option value="all">My whole library</option>
+          <option value="artist">One artist&hellip;</option>
+          <option value="match">Only titles containing&hellip;</option>
+        </select></label>
+      <label class="fld" id="blWhoWrap">Artist / text to match<input id="blWho" list="blArtists"><datalist id="blArtists"></datalist></label>
+      <label class="fld">What to do
+        <select id="blOp">
+          <option value="replace">Find and replace text</option>
+          <option value="tidy">Tidy up (underscores, dots, (Official Video)&hellip;)</option>
+          <option value="split">Split &ldquo;Artist &ndash; Title&rdquo; into the two fields</option>
+          <option value="caps">Capitalise Each Word</option>
+          <option value="strip">Remove leading track numbers</option>
+          <option value="setartist">Set the artist to&hellip;</option>
+          <option value="prefix">Add text to the front</option>
+          <option value="suffix">Add text to the end</option>
+        </select></label>
+      <div class="grid2" id="blFindWrap">
+        <label class="fld">Find<input id="blFind"></label>
+        <label class="fld">Replace with<input id="blRepl"></label>
+      </div>
+      <div id="blPreview" class="card muted"></div>
+      <p class="hint">Nothing is written until you tap Apply, and the preview shows exactly what will change. This edits the names inside Pulse &mdash; the audio files themselves are untouched.</p>
+      <div class="row-btns" style="padding:0"><button class="ghost" id="blUndo">Undo the last rename</button></div>
+    </div>
+  </section>
+
   <section id="pickSheet" class="sheet">
     <div class="sh-head"><button class="text-btn" id="pkClose">Close</button><b id="pkTitle">Choose</b><span></span></div>
     <div id="pkList" class="list"></div>
@@ -928,7 +988,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '8.0.0';
+const APP_VERSION = '8.1.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -2143,6 +2203,7 @@ function trackMenu(id) {
     { label: t.fav ? 'Remove from favorites' : 'Add to favorites', run: () => toggleFav(id) },
     { label: 'Add to playlist…', run: () => pickPlaylist(id) },
     { label: 'Start radio from this track', run: () => radioFrom(t) },
+    { label: 'Rename…', run: () => RENAME.open(id) },
     { label: 'Edit tags / BPM', run: () => openEditor(id) },
     { label: 'Detect BPM & loudness', run: async () => { toast('Analysing…'); try { const r = await FX.analyseTrack(id, { force: true }); toast(r && r.bpm ? `${r.bpm} BPM detected` : 'Could not detect a tempo'); render(); } catch (e) { toast('Analysis failed'); } } },
     { label: 'Find artwork online', run: () => FX.artworkSheet(id) },
@@ -2632,6 +2693,7 @@ function wire() {
   $('btnCloud').onclick = () => CLOUD.open();
   $('diagInput').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) { toast('Inspecting…'); VID.diagnose(f); } };
   $('btnPersist').onclick = () => requestPersist(false);
+  $('btnBulkRename').onclick = () => RENAME.openBulk();
 
   /* list delegation */
   document.addEventListener('click', (ev) => {
@@ -3200,6 +3262,7 @@ const FX = (() => {
       return;
     }
 
+    tickClock();
     V.canvases.forEach((c) => paint(c, out, low));
     return;
   }
@@ -3254,6 +3317,7 @@ const FX = (() => {
     c1: '#ff3e58', c2: '#ff8c3c', c3: '#8b5cf6',
     textPos: 'bottom', textSize: 'tiny', textAlways: true,
     dir: 'v',               // v = bars rise from the bottom, h = bars run from the left
+    centreBand: true,       // with a background on, keep the bars to a band across the middle
     orient: 'auto'          // auto | landscape | portrait (full-screen view)
   };
   const STYLE_PRESETS = {
@@ -3262,7 +3326,10 @@ const FX = (() => {
     'Smoke & 3D':   { shape: 'bars3d', palette: 'accent',    bg: 'smoke' },
     Cyberpunk:      { shape: 'bars3d', palette: 'cyberpunk', bg: 'grid' },
     'Vice City':    { shape: 'mirror', palette: 'vice',      bg: 'police' },
-    'Ice arc':      { shape: 'arc',    palette: 'ice',       bg: 'smoke' }
+    'Ice arc':      { shape: 'arc',    palette: 'ice',       bg: 'smoke' },
+    'Fire & ice':   { shape: 'bars3d', palette: 'custom',    bg: 'smoke', c1: '#ff3d2e', c2: '#ffb03a', c3: '#2ec5ff' },
+    'Deep space':   { shape: 'bars',   palette: 'ice',       bg: 'space' },
+    Nebula:         { shape: 'bars3d', palette: 'rainbow',   bg: 'space' }
   };
   function style() {
     const m = mix();
@@ -3305,43 +3372,212 @@ const FX = (() => {
   }
 
   /* ---------- animated backgrounds ---------- */
-  const SM = { t: 0, blobs: null, off: null };
-  function smokeBlobs() {
-    if (SM.blobs) return SM.blobs;
-    SM.blobs = [];
-    for (let i = 0; i < 6; i++) SM.blobs.push({
-      x: 0.2 + 0.6 * ((i * 37 % 100) / 100), y: 0.35 + 0.5 * ((i * 61 % 100) / 100),
-      r: 0.28 + 0.22 * ((i * 17 % 100) / 100),
-      sx: (i % 2 ? 1 : -1) * (0.012 + 0.01 * (i % 3)), sy: (i % 3 ? -1 : 1) * 0.008,
-      hue: i / 6
-    });
-    return SM.blobs;
+  /* ---------- smoke: plumes rolling in from the sides ----------
+     Two fronts, warm from the left and cool from the right, drift
+     inward, tumble, collide down the middle and dissipate. Drawn on a
+     small offscreen canvas and scaled up, which gives a soft
+     volumetric blur for almost nothing. */
+  const SM = { t: 0, off: null, puffs: [], seed: 1, burst: 0 };
+  function rnd() {                    /* deterministic — no Math.random churn */
+    SM.seed = (SM.seed * 1664525 + 1013904223) % 4294967296;
+    return SM.seed / 4294967296;
+  }
+  function spawnPuff(side, w, h, vigour) {
+    const fromTB = rnd() < 0.22;      /* a few roll in from top and bottom too */
+    const p = { side, life: 0, ttl: 3.4 + rnd() * 3.2, seedA: rnd() * 6.283, seedB: rnd() * 6.283 };
+    /* puffs travel in plumes: a shared lane per side, so they roll as a
+       column instead of averaging out into an even fog */
+    const lane = Math.floor(rnd() * 3);
+    if (fromTB) {
+      p.x = 0.18 + rnd() * 0.64;
+      p.y = rnd() < 0.5 ? -0.12 : 1.12;
+      p.vx = (0.5 - p.x) * (0.05 + rnd() * 0.05);
+      p.vy = (p.y < 0 ? 1 : -1) * (0.10 + rnd() * 0.08);
+    } else {
+      p.x = side > 0 ? 1.10 : -0.10;
+      p.y = 0.18 + lane * 0.28 + (rnd() - 0.5) * 0.12;
+      p.vx = -side * (0.15 + rnd() * 0.13) * (0.85 + vigour);
+      p.vy = (rnd() - 0.5) * 0.05;
+    }
+    p.r = 0.035 + rnd() * 0.065;
+    p.grow = 0.014 + rnd() * 0.022;
+    p.spin = (rnd() - 0.5) * 1.6;
+    /* left front takes the warm end of the palette, right front the cool end */
+    p.hue = side > 0 ? 0.80 + rnd() * 0.20 : rnd() * 0.22;
+    p.alpha = 0.20 + rnd() * 0.18;
+    SM.puffs.push(p);
   }
   function drawSmoke(ctx, w, h, bass, dt) {
     SM.t += dt;
     if (!SM.off) SM.off = document.createElement('canvas');
-    const ow = Math.max(60, Math.round(w / 5)), oh = Math.max(60, Math.round(h / 5));
+    /* deliberately coarse: upscaling is what makes it look like smoke */
+    const ow = Math.max(90, Math.round(w / 4.5)), oh = Math.max(90, Math.round(h / 4.5));
     if (SM.off.width !== ow || SM.off.height !== oh) { SM.off.width = ow; SM.off.height = oh; }
     const o = SM.off.getContext('2d');
+
+    /* a beat throws an extra pulse of smoke in from both sides */
+    if (V.beat > 0.75 && SM.burst <= 0) { SM.burst = 6; }
+    const want = 68;
+    let spawns = (SM.puffs.length < want ? 3 : 0) + (SM.burst > 0 ? 3 : 0);
+    while (spawns-- > 0 && SM.puffs.length < 96) spawnPuff(rnd() < 0.5 ? 1 : -1, w, h, bass);
+    if (SM.burst > 0) SM.burst--;
+
+    /* advance */
+    for (let i = SM.puffs.length - 1; i >= 0; i--) {
+      const p = SM.puffs[i];
+      p.life += dt;
+      if (p.life > p.ttl) { SM.puffs.splice(i, 1); continue; }
+      const k = p.life / p.ttl;
+      /* curl: two out-of-phase sines make it tumble instead of sliding */
+      const curlX = Math.sin(SM.t * 0.7 + p.seedA) * 0.012 * p.spin;
+      const curlY = Math.cos(SM.t * 0.9 + p.seedB) * 0.016 * p.spin;
+      p.x += (p.vx + curlX) * dt;
+      p.y += (p.vy + curlY) * dt;
+      /* the fronts pile up rather than pass through each other */
+      const toMid = 0.5 - p.x;
+      p.vx += toMid * 0.10 * dt;
+      p.vx *= (1 - 0.22 * dt);
+      p.vy += (Math.sin(SM.t * 0.5 + p.seedA) * 0.03 - p.vy * 0.35) * dt;
+      p.r = Math.min(0.20, p.r + p.grow * dt * (1 + bass * 0.8));
+      p.k = k;
+    }
+
     o.clearRect(0, 0, ow, oh);
     o.globalCompositeOperation = 'lighter';
-    for (const b of smokeBlobs()) {
-      const px = (b.x + Math.sin(SM.t * b.sx * 6) * 0.12) * ow;
-      const py = (b.y + Math.cos(SM.t * b.sy * 6) * 0.10) * oh;
-      const pr = (b.r * (0.85 + bass * 0.5)) * Math.min(ow, oh);
-      const col = colourAt(b.hue);
-      const g = o.createRadialGradient(px, py, 0, px, py, pr);
-      g.addColorStop(0, col.replace('rgb(', 'rgba(').replace(')', `,${(0.30 + bass * 0.30).toFixed(3)})`));
+    const scale = Math.max(ow, oh);
+    for (const p of SM.puffs) {
+      const px = p.x * ow, py = p.y * oh;
+      const pr = p.r * scale * (0.9 + bass * 0.45);
+      if (pr <= 0) continue;
+      /* fade in, hold, fade out */
+      const env = Math.min(1, p.k * 5) * Math.min(1, (1 - p.k) * 2.6);
+      const a = p.alpha * env * (0.8 + bass * 0.45);
+      if (a <= 0.003) continue;
+      const col = colourAt(p.hue);
+      const g = o.createRadialGradient(px, py, pr * 0.06, px, py, pr);
+      g.addColorStop(0, col.replace('rgb(', 'rgba(').replace(')', `,${a.toFixed(3)})`));
+      g.addColorStop(0.38, col.replace('rgb(', 'rgba(').replace(')', `,${(a * 0.30).toFixed(3)})`));
       g.addColorStop(1, 'rgba(0,0,0,0)');
       o.fillStyle = g;
       o.beginPath(); o.arc(px, py, pr, 0, 6.283); o.fill();
     }
+    /* where the two fronts meet, a brighter seam that breathes with the bass */
+    const seam = o.createLinearGradient(ow * 0.20, 0, ow * 0.80, 0);
+    seam.addColorStop(0, 'rgba(0,0,0,0)');
+    seam.addColorStop(0.5, `rgba(255,255,255,${(0.02 + bass * 0.06).toFixed(3)})`);
+    seam.addColorStop(1, 'rgba(0,0,0,0)');
+    o.fillStyle = seam; o.fillRect(0, 0, ow, oh);
     o.globalCompositeOperation = 'source-over';
+
     ctx.save();
-    ctx.globalAlpha = 0.9;
-    ctx.filter = 'blur(0px)';
+    ctx.globalAlpha = 0.95;
+    ctx.imageSmoothingEnabled = true;
     ctx.drawImage(SM.off, 0, 0, w, h);      /* upscaling a small canvas = free blur */
+    /* a soft vignette so the middle, where the bars sit, stays readable */
+    const vg = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.15, w / 2, h / 2, Math.max(w, h) * 0.72);
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(0,0,0,.28)');
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, w, h);
     ctx.restore();
+  }
+
+  /* ---------- space: parallax stars and slow planets ---------- */
+  const SP = { t: 0, stars: null, planets: null, seed: 7 };
+  function srnd() {
+    SP.seed = (SP.seed * 1103515245 + 12345) % 2147483648;
+    return SP.seed / 2147483648;
+  }
+  function spaceInit() {
+    if (SP.stars) return;
+    SP.stars = [];
+    for (let i = 0; i < 150; i++) {
+      const depth = 0.25 + srnd() * 0.75;          /* near stars drift faster */
+      SP.stars.push({ x: srnd(), y: srnd(), depth, r: 0.4 + depth * 1.5, tw: srnd() * 6.283 });
+    }
+    SP.planets = [];
+    const n = 4;
+    for (let i = 0; i < n; i++) {
+      SP.planets.push({
+        orbit: 0.20 + i * 0.16 + srnd() * 0.05,     /* radius, as a share of the screen */
+        ang: srnd() * 6.283,
+        speed: (0.05 + srnd() * 0.09) * (i % 2 ? -1 : 1),
+        r: 0.055 + srnd() * 0.055,
+        hue: srnd(),
+        ring: srnd() < 0.4,
+        tilt: (srnd() - 0.5) * 1.2
+      });
+    }
+  }
+  function drawSpace(ctx, w, h, bass, dt) {
+    spaceInit();
+    SP.t += dt * (1 + bass * 1.1);          /* the whole system speeds up on loud parts */
+    const cx = w / 2, cy = h / 2, R = Math.min(w, h);
+
+    /* deep background wash */
+    const bg = ctx.createRadialGradient(cx, cy * 0.8, 0, cx, cy, Math.max(w, h) * 0.8);
+    bg.addColorStop(0, 'rgba(22,20,52,.85)');
+    bg.addColorStop(0.55, 'rgba(9,8,24,.9)');
+    bg.addColorStop(1, 'rgba(0,0,0,1)');
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
+
+    /* a faint nebula in the palette colours */
+    for (let i = 0; i < 3; i++) {
+      const nx = cx + Math.sin(SP.t * 0.06 + i * 2.1) * w * 0.28;
+      const ny = cy + Math.cos(SP.t * 0.05 + i * 1.7) * h * 0.22;
+      const nr = R * (0.35 + i * 0.12);
+      const col = colourAt(i / 3);
+      const g = ctx.createRadialGradient(nx, ny, 0, nx, ny, nr);
+      g.addColorStop(0, col.replace('rgb(', 'rgba(').replace(')', `,${(0.10 + bass * 0.10).toFixed(3)})`));
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(nx, ny, nr, 0, 6.283); ctx.fill();
+    }
+
+    /* stars, drifting by depth, twinkling on the beat */
+    for (const st of SP.stars) {
+      const x = ((st.x + SP.t * 0.006 * st.depth) % 1) * w;
+      const y = ((st.y + SP.t * 0.0015 * st.depth) % 1) * h;
+      const tw = 0.55 + 0.45 * Math.sin(SP.t * 2.2 + st.tw);
+      const a = tw * (0.35 + st.depth * 0.5) * (0.8 + V.beat * 0.5);
+      ctx.fillStyle = `rgba(255,255,255,${a.toFixed(3)})`;
+      ctx.beginPath(); ctx.arc(x, y, st.r * (1 + V.beat * 0.5), 0, 6.283); ctx.fill();
+    }
+
+    /* planets on slow orbits around the centre, where the bars are */
+    for (const p of SP.planets) {
+      p.ang += p.speed * dt;
+      const orb = p.orbit * R * (1 + bass * 0.06);
+      const px = cx + Math.cos(p.ang) * orb * 1.25;
+      const py = cy + Math.sin(p.ang) * orb * 0.62;      /* squashed = tilted orbit */
+      const pr = p.r * R * (1 + bass * 0.10);
+      const col = colourAt(p.hue);
+      if (p.ring) {
+        ctx.save();
+        ctx.translate(px, py); ctx.rotate(p.tilt); ctx.scale(1, 0.3);
+        ctx.strokeStyle = col.replace('rgb(', 'rgba(').replace(')', ',.5)');
+        ctx.lineWidth = Math.max(1, pr * 0.16);
+        ctx.beginPath(); ctx.arc(0, 0, pr * 1.85, 0, 6.283); ctx.stroke();
+        ctx.restore();
+      }
+      /* lit from the centre, so it reads as a sphere */
+      const lit = ctx.createRadialGradient(px - pr * 0.35, py - pr * 0.35, pr * 0.1, px, py, pr);
+      lit.addColorStop(0, col);
+      lit.addColorStop(0.6, col.replace('rgb(', 'rgba(').replace(')', ',.8)'));
+      lit.addColorStop(1, 'rgba(0,0,0,.75)');
+      ctx.fillStyle = lit;
+      ctx.beginPath(); ctx.arc(px, py, pr, 0, 6.283); ctx.fill();
+      /* glow */
+      const gl = ctx.createRadialGradient(px, py, pr, px, py, pr * 2.4);
+      gl.addColorStop(0, col.replace('rgb(', 'rgba(').replace(')', `,${(0.18 + bass * 0.18).toFixed(3)})`));
+      gl.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = gl;
+      ctx.beginPath(); ctx.arc(px, py, pr * 2.4, 0, 6.283); ctx.fill();
+    }
+
+    /* a whisper of darkening right behind the bars, not enough to hide a planet */
+    const vg = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 0.45);
+    vg.addColorStop(0, 'rgba(0,0,0,.28)');
+    vg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, w, h);
   }
   function drawGrid(ctx, w, h, bass, dt) {
     SM.t += dt;
@@ -3390,6 +3626,7 @@ const FX = (() => {
     if (st.bg === 'smoke') { ctx.fillStyle = '#05040a'; ctx.fillRect(0, 0, w, h); drawSmoke(ctx, w, h, bass, dt); }
     else if (st.bg === 'grid') drawGrid(ctx, w, h, bass, dt);
     else if (st.bg === 'police') drawPolice(ctx, w, h, bass, dt);
+    else if (st.bg === 'space') drawSpace(ctx, w, h, bass, dt);
   }
 
   /* ---------- shapes ---------- */
@@ -3510,26 +3747,46 @@ const FX = (() => {
   }
 
   let lastFrame = 0;
+  /* one clock for the whole frame: paint() runs once per canvas, so computing
+     dt inside it left every canvas after the first with dt ~= 0 and froze the
+     smoke, the grid and the planets in place. */
+  function tickClock() {
+    const now = performance.now();
+    const dt = Math.min(0.05, (now - (lastFrame || now)) / 1000);
+    lastFrame = now;
+    V.dt = dt || 0.016;
+    return V.dt;
+  }
   function paint(c, bands, low) {
     if (!fitCanvas(c)) return;
     const ctx = c.getContext('2d');
     const w = c.width, h = c.height;
-    const now = performance.now();
-    const dt = Math.min(0.05, (now - (lastFrame || now)) / 1000);
-    lastFrame = now;
+    const dt = V.dt || 0.016;
     const st = style();
     const shape = c.dataset.mode && c.dataset.mode !== 'auto' ? c.dataset.mode : st.shape;
     ctx.clearRect(0, 0, w, h);
     if (c.id === 'vizBig' || c.id === 'vizPreview') drawBackground(ctx, w, h, low, dt);
+    /* With a scene behind them, full-height bars would wall it off. Squeeze
+       them into a band across the middle instead, so the smoke or the
+       planets read around the edges — the bars stay the centrepiece. */
+    const scenic = (c.id === 'vizBig' || c.id === 'vizPreview') && st.bg !== 'none' && st.centreBand !== false;
+    let band = 0;
+    if (scenic) {
+      band = Math.round(h * (shape === 'arc' ? 0.55 : 0.46));
+      ctx.save();
+      ctx.translate(0, Math.round((h - band) / 2));
+    }
+    const bh = scenic ? band : h;
     const sideways = st.dir === 'h' && shape !== 'bars3d';
     if (sideways) { ctx.save(); ctx.translate(w, 0); ctx.rotate(Math.PI / 2); }
-    const dw = sideways ? h : w, dh = sideways ? w : h;
+    const dw = sideways ? bh : w, dh = sideways ? w : bh;
     if (shape === 'blocks') drawBlocks(ctx, dw, dh, bands);
-    else if (shape === 'bars3d') drawBars3D(ctx, w, h, bands, V.beat);
+    else if (shape === 'bars3d') drawBars3D(ctx, w, bh, bands, V.beat);
     else if (shape === 'arc') drawArc(ctx, dw, dh, bands, V.beat);
     else if (shape === 'mirror') drawBars(ctx, dw, dh, bands, true);
     else drawBars(ctx, dw, dh, bands, false);
     if (sideways) ctx.restore();
+    if (scenic) ctx.restore();
     if (shape !== 'arc' && V.beat > 0.05) {
       ctx.fillStyle = `rgba(255,255,255,${(V.beat * 0.08).toFixed(3)})`;
       ctx.fillRect(0, 0, w, h);
@@ -4050,9 +4307,10 @@ const FX = (() => {
         </select></label>
       <label class="slider-row">Background
         <select id="stBg">
-          ${[['none', 'Plain black'], ['smoke', 'Drifting smoke'], ['grid', 'Neon grid'], ['police', 'Vice City police lights']]
+          ${[['none', 'Plain black'], ['smoke', 'Colliding smoke'], ['space', 'Planets & stars'], ['grid', 'Neon grid'], ['police', 'Vice City police lights']]
             .map(([v, l]) => `<option value="${v}" ${st.bg === v ? 'selected' : ''}>${l}</option>`).join('')}
         </select></label>
+      <label class="switch"><input type="checkbox" id="stBand" ${st.centreBand !== false ? 'checked' : ''}><span>With a background on, keep the bars to the middle</span></label>
       <p class="hint">Backgrounds and 3D only draw on the full-screen visualizer (and the preview below) — the in-app strip stays light on battery.</p>
       ${slider('mVizI', 'Visualizer sensitivity', 0.5, 2.5, 0.1, m.vizIntensity, '×')}
       <canvas id="vizPreview" class="viz-preview" data-mode="${m.viz}"></canvas>
@@ -4183,6 +4441,7 @@ const FX = (() => {
     stBind('stTextSize', 'textSize');
     ['stc1', 'stc2', 'stc3'].forEach((id, i) => { const n = $(id); if (n) n.oninput = () => { style()['c' + (i + 1)] = n.value; save(); }; });
     const ta = $('stTextAlways'); if (ta) ta.onchange = () => { style().textAlways = ta.checked; save(); applyTextStyle(); };
+    const bnd = $('stBand'); if (bnd) bnd.onchange = () => { style().centreBand = bnd.checked; save(); };
     els('[data-stylepreset]').forEach((b) => b.onclick = () => {
       Object.assign(style(), STYLE_PRESETS[b.dataset.stylepreset]);
       save(); renderMixer(); toast(b.dataset.stylepreset);
@@ -6144,6 +6403,206 @@ const SETTABS = (() => {
   return { init, show, reveal, groupOf, get current() { return cur; } };
 })();
 window.SETTABS = SETTABS;
+
+/* ============================================================
+   RENAME — tidy up the names in the library, one track or many.
+   Only the names stored in Pulse change; the audio files are
+   never touched.
+   ============================================================ */
+const RENAME = (() => {
+  let editing = null;
+  let undoStack = null;      /* [{id, title, artist}] from the last bulk apply */
+
+  /* ---------- the text fixers ---------- */
+  const NOISE = [
+    /\((official\s*)?(music\s*)?(video|audio|lyrics?|visualizer|visualiser|hd|hq|4k|full\s*album)\)/ig,
+    /\[(official\s*)?(music\s*)?(video|audio|lyrics?|visualizer|visualiser|hd|hq|4k)\]/ig,
+    /\b(official\s+(music\s+)?video|lyric video|audio only|free download|out now)\b/ig,
+    /\b(128|160|192|256|320)\s*kbps\b/ig,
+    /\bwww\.[a-z0-9.-]+\b/ig,
+    /\.(mp3|m4a|flac|wav|ogg|opus|aac|wma|mp4|webm)$/i
+  ];
+
+  function tidy(s) {
+    let out = String(s || '');
+    out = out.replace(/[_]+/g, ' ');
+    /* dots used as separators, but keep decimals and initials like J.R. */
+    out = out.replace(/(?<=[a-z]{2})\.(?=[a-z]{2})/ig, ' ');
+    NOISE.forEach((re) => { out = out.replace(re, ' '); });
+    out = out.replace(/\s*[-–—]\s*$/, '');
+    out = out.replace(/\(\s*\)|\[\s*\]/g, ' ');
+    out = out.replace(/\s{2,}/g, ' ').trim();
+    return out;
+  }
+  function stripNumber(s) {
+    return String(s || '').replace(/^\s*\d{1,3}\s*[-–—._)]+\s*/, '').trim();
+  }
+  const SMALL = ['a', 'an', 'and', 'the', 'of', 'or', 'in', 'on', 'at', 'to', 'for', 'vs', 'de', 'la', 'le', 'du', 'des'];
+  function caps(s) {
+    const words = String(s || '').toLowerCase().split(/(\s+|\()/);
+    let first = true;
+    return words.map((w) => {
+      if (!w.trim()) return w;
+      const bare = w.replace(/[^a-zà-ÿ0-9']/ig, '');
+      const keep = !first && SMALL.includes(bare);
+      first = false;
+      if (keep) return w;
+      return w.replace(/[a-zà-ÿ]/i, (c) => c.toUpperCase());
+    }).join('');
+  }
+  /* "Artist - Title" → both halves. Returns null when there is no separator. */
+  function split(s) {
+    const m = String(s || '').match(/^(.{1,80}?)\s+[-–—]\s+(.+)$/);
+    if (!m) return null;
+    return { artist: m[1].trim(), title: m[2].trim() };
+  }
+  function fromFile(t) {
+    const f = t && (t.fileName || t.file || t.name) || '';
+    return tidy(String(f).replace(/\.[a-z0-9]{2,5}$/i, ''));
+  }
+
+  /* ---------- single track ---------- */
+  function open(id) {
+    const t = T.get(id); if (!t) return;
+    editing = id;
+    $('rnTitle').value = t.title || '';
+    $('rnArtist').value = t.artist || '';
+    $('rnPreview').textContent = t.fileName ? 'File: ' + t.fileName : '';
+    openSheet('renameSheet');
+  }
+  async function save() {
+    const t = T.get(editing); if (!t) return;
+    const title = $('rnTitle').value.trim();
+    const artist = $('rnArtist').value.trim();
+    if (!title) { toast('Give it a title'); return; }
+    t.title = title;
+    t.artist = artist || 'Unknown artist';
+    if (!t.albumArtist || t.albumArtist === 'Unknown artist') t.albumArtist = t.artist;
+    await T.save(t);
+    closeSheet('renameSheet');
+    render(); if (window.paintNow) paintNow();
+    if (window.updateMediaSession) updateMediaSession();
+    toast('Renamed');
+  }
+  function fix(kind) {
+    const t = T.get(editing) || {};
+    const ti = $('rnTitle'), ar = $('rnArtist');
+    if (kind === 'tidy') { ti.value = tidy(stripNumber(ti.value)); ar.value = tidy(ar.value); }
+    else if (kind === 'caps') { ti.value = caps(ti.value); ar.value = caps(ar.value); }
+    else if (kind === 'fromfile') { const f = fromFile(t); if (f) ti.value = f; else toast('No file name stored for this one'); }
+    else if (kind === 'split') {
+      const p = split(ti.value);
+      if (!p) { toast('No “Artist - Title” pattern in there'); return; }
+      ar.value = p.artist; ti.value = p.title;
+    }
+  }
+
+  /* ---------- many tracks ---------- */
+  function scopeList() {
+    const scope = $('blScope').value;
+    const who = ($('blWho').value || '').trim().toLowerCase();
+    const all = T.list();
+    if (scope === 'artist') return who ? all.filter((t) => (t.artist || '').toLowerCase() === who) : [];
+    if (scope === 'match') return who ? all.filter((t) => (t.title || '').toLowerCase().includes(who)) : [];
+    return all;
+  }
+  /* what a track would become — pure, so the preview cannot lie */
+  function proposed(t) {
+    const op = $('blOp').value;
+    const find = $('blFind').value, repl = $('blRepl').value;
+    let title = t.title || '', artist = t.artist || '';
+    if (op === 'replace') {
+      if (!find) return null;
+      const re = new RegExp(find.replace(/[.*+?^${}()|[\]\\]/g, (c) => '\\' + c), 'ig');
+      title = title.replace(re, repl);
+    } else if (op === 'tidy') title = tidy(stripNumber(title));
+    else if (op === 'caps') { title = caps(title); artist = caps(artist); }
+    else if (op === 'strip') title = stripNumber(title);
+    else if (op === 'split') { const p = split(title); if (!p) return null; title = p.title; artist = p.artist; }
+    else if (op === 'setartist') { if (!repl && !find) return null; artist = (repl || find).trim(); }
+    else if (op === 'prefix') { if (!repl && !find) return null; title = (repl || find) + title; }
+    else if (op === 'suffix') { if (!repl && !find) return null; title = title + (repl || find); }
+    title = title.replace(/\s{2,}/g, ' ').trim();
+    artist = artist.replace(/\s{2,}/g, ' ').trim();
+    if (!title) return null;
+    if (title === (t.title || '') && artist === (t.artist || '')) return null;
+    return { title, artist };
+  }
+  function changes() {
+    const out = [];
+    for (const t of scopeList()) {
+      const p = proposed(t);
+      if (p) out.push({ t, p });
+    }
+    return out;
+  }
+  function preview() {
+    const box = $('blPreview');
+    if (!box) return;
+    const op = $('blOp').value;
+    $('blFindWrap').style.display = ['replace', 'setartist', 'prefix', 'suffix'].includes(op) ? '' : 'none';
+    $('blWhoWrap').style.display = $('blScope').value === 'all' ? 'none' : '';
+    const list = changes();
+    if (!list.length) { box.innerHTML = '<b>Nothing would change.</b><br>Pick a different option, or check the text you typed.'; return; }
+    const rows = list.slice(0, 8).map(({ t, p }) =>
+      `<div class="rn-row"><s>${esc(t.title)}${t.artist !== p.artist ? ' — ' + esc(t.artist) : ''}</s><br>
+       <b>${esc(p.title)}${t.artist !== p.artist ? ' — ' + esc(p.artist) : ''}</b></div>`).join('');
+    box.innerHTML = `<b>${list.length} track${list.length > 1 ? 's' : ''} would change:</b>${rows}` +
+      (list.length > 8 ? `<div class="rn-row">…and ${list.length - 8} more</div>` : '');
+  }
+  async function apply() {
+    const list = changes();
+    if (!list.length) { toast('Nothing to change'); return; }
+    if (!confirm(`Rename ${list.length} track${list.length > 1 ? 's' : ''}?`)) return;
+    undoStack = list.map(({ t }) => ({ id: t.id, title: t.title, artist: t.artist }));
+    for (const { t, p } of list) {
+      t.title = p.title;
+      t.artist = p.artist || 'Unknown artist';
+      if (!t.albumArtist || t.albumArtist === 'Unknown artist') t.albumArtist = t.artist;
+      await T.save(t);
+    }
+    render(); if (window.paintNow) paintNow();
+    toast(`Renamed ${list.length}`);
+    preview();
+  }
+  async function undo() {
+    if (!undoStack || !undoStack.length) { toast('Nothing to undo'); return; }
+    for (const u of undoStack) {
+      const t = T.get(u.id); if (!t) continue;
+      t.title = u.title; t.artist = u.artist;
+      await T.save(t);
+    }
+    toast(`Put ${undoStack.length} name${undoStack.length > 1 ? 's' : ''} back`);
+    undoStack = null;
+    render(); preview();
+  }
+
+  function openBulk() {
+    const artists = [...new Set(T.list().map((t) => t.artist).filter(Boolean))].sort();
+    $('blArtists').innerHTML = artists.map((a) => `<option value="${esc(a)}">`).join('');
+    openSheet('bulkSheet');
+    preview();
+  }
+
+  function init() {
+    const on = (id, ev, fn) => { const e = $(id); if (e) e[ev] = fn; };
+    on('rnCancel', 'onclick', () => closeSheet('renameSheet'));
+    on('rnSave', 'onclick', () => save());
+    els('[data-rnfix]').forEach((b) => b.onclick = () => fix(b.dataset.rnfix));
+    on('blCancel', 'onclick', () => closeSheet('bulkSheet'));
+    on('blApply', 'onclick', () => apply());
+    on('blUndo', 'onclick', () => undo());
+    ['blScope', 'blOp'].forEach((id) => on(id, 'onchange', preview));
+    ['blWho', 'blFind', 'blRepl'].forEach((id) => {
+      const e = $(id); if (!e) return;
+      let t; e.oninput = () => { clearTimeout(t); t = setTimeout(preview, 200); };
+    });
+  }
+  return { init, open, openBulk, tidy, caps, split, stripNumber, proposed, changes };
+})();
+window.RENAME = RENAME;
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => RENAME.init());
+else RENAME.init();
 
 const FIND = (() => {
   const VIEWS = [
