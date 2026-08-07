@@ -988,7 +988,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '8.4.0';
+const APP_VERSION = '8.5.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -3503,8 +3503,8 @@ const FX = (() => {
   };
   const DETAIL = {
     soft:  { scale: 0.55, count: 260, rate: 9,  size: 1.00, alpha: 1.00, hz: 60 },
-    fine:  { scale: 1.00, count: 700, rate: 20, size: 0.46, alpha: 0.85, hz: 30 },
-    ultra: { scale: 1.00, count: 1300, rate: 34, size: 0.34, alpha: 0.75, hz: 30 }
+    fine:  { scale: 1.00, count: 800, rate: 22, size: 0.38, alpha: 0.90, hz: 30 },
+    ultra: { scale: 1.00, count: 2000, rate: 46, size: 0.22, alpha: 0.85, hz: 30 }
   };
   const DETAIL_ORDER = ['ultra', 'fine', 'soft'];
 
@@ -3538,9 +3538,10 @@ const FX = (() => {
     const c = document.createElement('canvas');
     c.width = c.height = 64;
     const g = c.getContext('2d').createRadialGradient(32, 32, 0, 32, 32, 32);
-    g.addColorStop(0, colour.replace('rgb(', 'rgba(').replace(')', ',.85)'));
-    g.addColorStop(0.28, colour.replace('rgb(', 'rgba(').replace(')', ',.5)'));
-    g.addColorStop(0.62, colour.replace('rgb(', 'rgba(').replace(')', ',.13)'));
+    g.addColorStop(0, colour.replace('rgb(', 'rgba(').replace(')', ',1)'));
+    g.addColorStop(0.22, colour.replace('rgb(', 'rgba(').replace(')', ',.72)'));
+    g.addColorStop(0.5, colour.replace('rgb(', 'rgba(').replace(')', ',.22)'));
+    g.addColorStop(0.78, colour.replace('rgb(', 'rgba(').replace(')', ',.05)'));
     g.addColorStop(1, colour.replace('rgb(', 'rgba(').replace(')', ',0)'));
     const cx = c.getContext('2d');
     cx.fillStyle = g; cx.fillRect(0, 0, 64, 64);
@@ -3584,11 +3585,7 @@ const FX = (() => {
     const D0 = DETAIL[style().smokeDetail] || DETAIL.fine;
     RS.acc = (RS.acc || 0) + dt;
     const step = 1 / D0.hz;
-    if (RS.off && RS.acc < step) {           /* reuse last frame's buffer */
-      ctx.save(); ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(RS.off, 0, 0, w, h); ctx.restore();
-      return;
-    }
+    if (RS.off && RS.acc < step) { blitSmoke(ctx, w, h); return; }   /* reuse last buffer */
     const sdt = Math.min(0.08, RS.acc);
     RS.acc = 0;
     const t0 = performance.now();
@@ -3632,7 +3629,7 @@ const FX = (() => {
 
     /* erase a little of last frame — this is what leaves the wisps behind */
     o.globalCompositeOperation = 'destination-out';
-    o.fillStyle = `rgba(0,0,0,${(0.105 + dt * 0.6).toFixed(3)})`;
+    o.fillStyle = `rgba(0,0,0,${(0.16 + dt * 0.8).toFixed(3)})`;
     o.fillRect(0, 0, ow, oh);
 
     /* keep the population up; beats push an extra puff in from both sides */
@@ -3679,9 +3676,19 @@ const FX = (() => {
     o.globalAlpha = 1;
     o.globalCompositeOperation = 'source-over';
 
+    blitSmoke(ctx, w, h);
+  }
+
+  /* Drawing the buffer once, then again in 'overlay', steepens the tone curve:
+     the thin edges darken and the dense cores brighten, which is what reads as
+     sharpness. Far cheaper than an actual unsharp mask. */
+  function blitSmoke(ctx, w, h) {
     ctx.save();
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(RS.off, 0, 0, w, h);
+    ctx.globalCompositeOperation = 'overlay';
+    ctx.globalAlpha = 0.55;
     ctx.drawImage(RS.off, 0, 0, w, h);
     ctx.restore();
   }
@@ -3982,11 +3989,13 @@ const FX = (() => {
     if (scenic) {
       /* bottom = a low strip so the scene owns the screen; middle = the old
          centred band, at twice the height */
-      const share = place === 'bottom' ? (shape === 'arc' ? 0.30 : 0.23)
+      const share = place === 'bottom' ? (shape === 'arc' ? 0.16 : 0.12)
                                        : (shape === 'arc' ? 0.55 : 0.46);
       band = Math.round(h * share);
       inset = shape === 'bars3d' ? 0 : Math.round(w * 0.08);
-      const top = place === 'bottom' ? h - band - Math.round(h * 0.02) : Math.round((h - band) / 2);
+      /* flush with the very bottom of the screen — the bars should look like
+         they grow out of the phone's own navigation bar */
+      const top = place === 'bottom' ? h - band : Math.round((h - band) / 2);
       ctx.save();
       ctx.translate(inset, top);
     }
