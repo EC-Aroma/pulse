@@ -711,6 +711,12 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
             <button class="primary" id="btnBulkRename">Rename several tracks</button>
           </div>
 
+          <h3 class="section-h">Measure a folder</h3>
+          <p class="hint">Point this at a music folder and it reports what is in there and what the same music would weigh re-encoded &mdash; without importing or changing anything. It only reads names and sizes, so even a huge drive takes seconds. Works best on a computer: open this same page in Chrome there and pick the drive.</p>
+          <div class="row-btns">
+            <button class="primary" id="btnMeasure">Measure a folder</button>
+          </div>
+
           <div id="mixerApp"></div>
 
           <h3 class="section-h">App updates</h3>
@@ -983,6 +989,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
 
   <input type="file" id="fileInput" accept="audio/*,.mp3,.m4a,.aac,.flac,.ogg,.opus,.wav,.wma" multiple hidden>
   <input type="file" id="folderInput" webkitdirectory directory multiple hidden>
+  <input type="file" id="sizeInput" webkitdirectory directory multiple hidden>
   <input type="file" id="dataInput" accept="application/json,.json" hidden>
 <input type="file" id="videoInput" accept="video/*,.mp4,.m4v,.mov,.webm,.mkv,.avi,.3gp" multiple hidden>
 <input type="file" id="diagInput" accept="video/*,audio/*" hidden>
@@ -1004,7 +1011,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '9.9.0';
+const APP_VERSION = '10.0.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -2710,6 +2717,7 @@ function wire() {
   $('diagInput').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) { toast('Inspecting…'); VID.diagnose(f); } };
   $('btnPersist').onclick = () => requestPersist(false);
   $('btnBulkRename').onclick = () => RENAME.openBulk();
+  $('btnMeasure').onclick = () => MEASURE.open();
   $('btnSpeedTest').onclick = () => FX.selfTest();
   $('btnLastTest').onclick = () => {
     const t = S.settings.lastSelfTest;
@@ -7880,6 +7888,94 @@ window.SETTABS = SETTABS;
    Only the names stored in Pulse change; the audio files are
    never touched.
    ============================================================ */
+/* ============================================================
+   MEASURE — what is actually in a folder, and what it would
+   weigh re-encoded. Reads names and sizes only: no file is
+   opened, imported or changed, so a terabyte takes seconds.
+   ============================================================ */
+const MEASURE = (() => {
+  /* assumed bitrates, only used to turn a file size into a rough duration.
+     Rough is fine — this decides "fits on the phone" vs "needs a cloud". */
+  const RATES = {
+    flac: 900, wav: 1411, aiff: 1411, aif: 1411, alac: 800, ape: 700, wv: 700,
+    mp3: 256, m4a: 192, aac: 192, wma: 192, m4b: 96,
+    ogg: 160, oga: 160, opus: 128,
+    mp4: 2500, mkv: 3500, mov: 4000, avi: 2000, webm: 1800, m4v: 2500, wmv: 2000, flv: 1500
+  };
+  const VIDEO = ['mp4', 'mkv', 'mov', 'avi', 'webm', 'm4v', 'wmv', 'flv'];
+  /* a terabyte and a demo folder both have to read sensibly */
+  const gb = (b) => {
+    const g = b / 1e9;
+    if (g >= 10) return Math.round(g);
+    if (g >= 1) return Math.round(g * 10) / 10;
+    if (g >= 0.01) return Math.round(g * 100) / 100;
+    return Math.round(g * 1000) / 1000;
+  };
+  const opusGb = (mins, kbps) => gb(mins * 60 * kbps * 1000 / 8);
+  const pad = (v, n) => String(v).padStart(n);
+  const padR = (v, n) => String(v).padEnd(n);
+
+  function report(files) {
+    const byExt = new Map();
+    let bytes = 0, minutes = 0, videoBytes = 0, counted = 0;
+    const biggest = [];
+    for (const f of files) {
+      const ext = (f.name.split('.').pop() || '').toLowerCase();
+      const kbps = RATES[ext];
+      if (!kbps) continue;
+      const mins = (f.size * 8) / (kbps * 1000) / 60;
+      const e = byExt.get(ext) || { n: 0, bytes: 0, mins: 0 };
+      e.n++; e.bytes += f.size; e.mins += mins;
+      byExt.set(ext, e);
+      bytes += f.size; minutes += mins; counted++;
+      if (VIDEO.includes(ext)) videoBytes += f.size;
+      biggest.push({ name: f.webkitRelativePath || f.name, size: f.size });
+    }
+    if (!counted) return null;
+    biggest.sort((a, b) => b.size - a.size);
+
+    const L = [];
+    L.push('PULSE — FOLDER MEASUREMENT', '');
+    L.push(`${padR('type', 7)}${pad('files', 8)}${pad('GB now', 10)}${pad('hours', 9)}${pad('GB @128k', 11)}${pad('GB @192k', 11)}`);
+    L.push('-'.repeat(56));
+    [...byExt.entries()].sort((a, b) => b[1].bytes - a[1].bytes).forEach(([ext, e]) => {
+      L.push(`${padR('.' + ext, 7)}${pad(e.n, 8)}${pad(gb(e.bytes), 10)}${pad(Math.round(e.mins / 60 * 10) / 10, 9)}${pad(opusGb(e.mins, 128), 11)}${pad(opusGb(e.mins, 192), 11)}`);
+    });
+    L.push('-'.repeat(56));
+    L.push(`${padR('TOTAL', 7)}${pad(counted, 8)}${pad(gb(bytes), 10)}${pad(Math.round(minutes / 60 * 10) / 10, 9)}${pad(opusGb(minutes, 128), 11)}${pad(opusGb(minutes, 192), 11)}`);
+    L.push('');
+    L.push(`video in there: ${gb(videoBytes)} GB — only the soundtrack would be kept`);
+    L.push('');
+    L.push('The @128k and @192k columns are what this would weigh re-encoded to');
+    L.push('Opus. 128 kbps is transparent on headphones in a gym; 192 is');
+    L.push('comfortable for anything. Durations are estimated from file size.');
+    L.push('');
+    L.push('TWENTY BIGGEST FILES');
+    L.push('-'.repeat(56));
+    biggest.slice(0, 20).forEach((f) => L.push(`${pad(gb(f.size), 7)} GB  ${f.name}`));
+    return L.join('\n');
+  }
+
+  function open() {
+    const inp = $('sizeInput');
+    if (!inp) return;
+    inp.value = '';
+    inp.onchange = async (e) => {
+      const files = [...e.target.files];
+      e.target.value = '';
+      if (!files.length) return;
+      toast(`Measuring ${files.length.toLocaleString()} files…`);
+      await new Promise((r) => setTimeout(r, 30));
+      const text = report(files);
+      if (!text) { toast('No audio or video files in there'); return; }
+      if (window.OPS) OPS.showLog(text);
+    };
+    inp.click();
+  }
+  return { open, report };
+})();
+window.MEASURE = MEASURE;
+
 const RENAME = (() => {
   let editing = null;
   let undoStack = null;      /* [{id, title, artist}] from the last bulk apply */
