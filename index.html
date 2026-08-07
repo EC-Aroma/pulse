@@ -1003,7 +1003,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '9.5.0';
+const APP_VERSION = '9.6.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -3053,24 +3053,26 @@ const FLUID = (() => {
   let gl = null, canvas = null, ok = false, failed = false;
   let progs = {}, vao = null, quadBuf = null;
   let velocity = null, dye = null, divergence = null, curlTex = null, pressure = null;
+  let dyeTmp = null, dyeTmp2 = null;
   let simW = 0, simH = 0, dyeW = 0, dyeH = 0, texType = 0;
   let t = 0, seed = 3, injectAcc = 0;
 
   /* three quality steps; the watchdog in fx.js walks down these if a phone
      cannot keep up, rather than letting the frame rate rot */
   const QUALITY = {
-    soft:    { simRes: 96,  dyeRes: 320,  pressureIters: 12, dpr: 1.0 },
-    fine:    { simRes: 128, dyeRes: 512,  pressureIters: 18, dpr: 1.25 },
-    ultra:   { simRes: 160, dyeRes: 768,  pressureIters: 24, dpr: 1.75 },
+    soft:    { simRes: 96,  dyeRes: 320,  pressureIters: 12, dpr: 1.0,  maccormack: false },
+    fine:    { simRes: 128, dyeRes: 512,  pressureIters: 18, dpr: 1.25, maccormack: false },
+    ultra:   { simRes: 160, dyeRes: 768,  pressureIters: 24, dpr: 1.75, maccormack: true },
     /* for phones with room to spare: a finer grid, a dye buffer bigger than
        most screens, and the canvas itself at full device resolution */
-    extreme: { simRes: 224, dyeRes: 1152, pressureIters: 30, dpr: 3.0 }
+    extreme: { simRes: 224, dyeRes: 1152, pressureIters: 30, dpr: 3.0,  maccormack: true }
   };
   function setQuality(name) {
     const q = QUALITY[name] || QUALITY.fine;
     if (CFG.simRes === q.simRes && CFG.dyeRes === q.dyeRes) return false;
     CFG.simRes = q.simRes; CFG.dyeRes = q.dyeRes; CFG.pressureIters = q.pressureIters;
     CFG.dpr = q.dpr || 1.25;
+    CFG.maccormack = !!q.maccormack;
     simW = simH = dyeW = dyeH = 0;      /* force the buffers to be rebuilt */
     return true;
   }
@@ -3080,6 +3082,7 @@ const FLUID = (() => {
     dyeRes: 512,          // dye grid on the short side — this is the detail you see
     pressureIters: 18,
     dpr: 1.25,            // how much of the phone's real resolution to draw at
+    maccormack: false,    // second-order advection: sharper, three passes instead of one
     velDissipation: 0.32,
     dyeDissipation: 1.15,
     curl: 34,             // vorticity confinement strength
@@ -3207,6 +3210,32 @@ const FLUID = (() => {
         vec3 splat = exp(-dot(p, p) / radius) * color;
         vec3 base = texture(uTarget, vUv).xyz;
         outColor = vec4(base + splat, 1.0);
+      }`,
+
+    /* MacCormack: advect forward, advect that result backward, and use the
+       round-trip error to correct the forward step. Semi-Lagrangian advection
+       loses detail every frame because it interpolates; this puts most of it
+       back for the cost of two extra passes. The clamp to the neighbourhood
+       keeps it from overshooting into ringing. */
+    maccormack: F_HEAD + `
+      uniform sampler2D uPhi, uPhiHat, uPhiBar, uVelocity;
+      uniform vec2 texelSize, dyeTexelSize;
+      uniform float dt, strength;
+      void main() {
+        vec4 hat = texture(uPhiHat, vUv);
+        vec4 bar = texture(uPhiBar, vUv);
+        vec4 corrected = hat + strength * 0.5 * (texture(uPhi, vUv) - bar);
+        /* limit to what the source actually held around the back-traced point */
+        vec2 coord = vUv - dt * texture(uVelocity, vUv).xy * texelSize;
+        vec2 st = coord / dyeTexelSize - 0.5;
+        vec2 iuv = floor(st);
+        vec4 a = texture(uPhi, (iuv + vec2(0.5, 0.5)) * dyeTexelSize);
+        vec4 b = texture(uPhi, (iuv + vec2(1.5, 0.5)) * dyeTexelSize);
+        vec4 c = texture(uPhi, (iuv + vec2(0.5, 1.5)) * dyeTexelSize);
+        vec4 d = texture(uPhi, (iuv + vec2(1.5, 1.5)) * dyeTexelSize);
+        vec4 lo = min(min(a, b), min(c, d));
+        vec4 hi = max(max(a, b), max(c, d));
+        outColor = clamp(corrected, lo, hi);
       }`,
 
     clear: F_HEAD + `
@@ -3353,10 +3382,12 @@ const FLUID = (() => {
     const lin = gl.LINEAR;
     velocity = makeDouble(simW, simH, gl.RG16F, gl.RG, texType, lin);
     dye = makeDouble(dyeW, dyeH, gl.RGBA16F, gl.RGBA, texType, lin);
+    dyeTmp = makeFBO(dyeW, dyeH, gl.RGBA16F, gl.RGBA, texType, lin);
+    dyeTmp2 = makeFBO(dyeW, dyeH, gl.RGBA16F, gl.RGBA, texType, lin);
     divergence = makeFBO(simW, simH, gl.R16F, gl.RED, texType, gl.NEAREST);
     curlTex = makeFBO(simW, simH, gl.R16F, gl.RED, texType, gl.NEAREST);
     pressure = makeDouble(simW, simH, gl.R16F, gl.RED, texType, gl.NEAREST);
-    if (!velocity || !dye || !divergence || !curlTex || !pressure) { failed = true; ok = false; }
+    if (!velocity || !dye || !divergence || !curlTex || !pressure || !dyeTmp || !dyeTmp2) { failed = true; ok = false; }
   }
 
   /* ---------- injection ---------- */
@@ -3467,13 +3498,39 @@ const FLUID = (() => {
     gl.uniform1f(progs.advect.u.dissipation, CFG.velDissipation);
     blit(velocity.write); velocity.swap();
 
-    use(progs.advect, velocity);
-    gl.uniform2f(progs.advect.u.dyeTexelSize, dye.texelX, dye.texelY);
-    gl.uniform1i(progs.advect.u.uVelocity, velocity.read.attach(0));
-    gl.uniform1i(progs.advect.u.uSource, dye.read.attach(1));
-    gl.uniform1f(progs.advect.u.dt, dt);
-    gl.uniform1f(progs.advect.u.dissipation, CFG.dyeDissipation);
-    blit(dye.write); dye.swap();
+    if (CFG.maccormack) {
+      /* forward */
+      use(progs.advect, velocity);
+      gl.uniform2f(progs.advect.u.dyeTexelSize, dye.texelX, dye.texelY);
+      gl.uniform1i(progs.advect.u.uVelocity, velocity.read.attach(0));
+      gl.uniform1i(progs.advect.u.uSource, dye.read.attach(1));
+      gl.uniform1f(progs.advect.u.dt, dt);
+      gl.uniform1f(progs.advect.u.dissipation, CFG.dyeDissipation);
+      blit(dyeTmp);
+      /* and back again */
+      gl.uniform1i(progs.advect.u.uSource, dyeTmp.attach(1));
+      gl.uniform1f(progs.advect.u.dt, -dt);
+      gl.uniform1f(progs.advect.u.dissipation, 0.0);
+      blit(dyeTmp2);
+      /* correct */
+      use(progs.maccormack, velocity);
+      gl.uniform2f(progs.maccormack.u.dyeTexelSize, dye.texelX, dye.texelY);
+      gl.uniform1i(progs.maccormack.u.uPhi, dye.read.attach(0));
+      gl.uniform1i(progs.maccormack.u.uPhiHat, dyeTmp.attach(1));
+      gl.uniform1i(progs.maccormack.u.uPhiBar, dyeTmp2.attach(2));
+      gl.uniform1i(progs.maccormack.u.uVelocity, velocity.read.attach(3));
+      gl.uniform1f(progs.maccormack.u.dt, dt);
+      gl.uniform1f(progs.maccormack.u.strength, 0.9);
+      blit(dye.write); dye.swap();
+    } else {
+      use(progs.advect, velocity);
+      gl.uniform2f(progs.advect.u.dyeTexelSize, dye.texelX, dye.texelY);
+      gl.uniform1i(progs.advect.u.uVelocity, velocity.read.attach(0));
+      gl.uniform1i(progs.advect.u.uSource, dye.read.attach(1));
+      gl.uniform1f(progs.advect.u.dt, dt);
+      gl.uniform1f(progs.advect.u.dissipation, CFG.dyeDissipation);
+      blit(dye.write); dye.swap();
+    }
 
     /* --- to the screen --- */
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -5736,9 +5793,12 @@ const FX = (() => {
                   : wasOpen ? 'measured with the full-screen visualizer open'
                   : 'measured on the current screen — open the full-screen visualizer for the real number');
     L.push(`frame rate: ${fps.avg} fps (worst ${fps.min}) over ${fps.seconds}s, ${fps.frames} frames`);
-    L.push(fps.avg >= 50 ? '  → smooth' : fps.avg >= 30 ? '  → fine, but not buttery — try one quality step down'
-      : fps.avg >= 20 ? '  → choppy: drop the quality, or use a lighter background'
-      : '  → too slow to enjoy: switch the background to Pixelised clouds or Plain black');
+    if (fps.avg >= 58) L.push('  (60 is the browser\'s ceiling — hitting it means the phone kept up, not how much room is left)');
+    if (st.bg === 'fluid' && window.FLUID && FLUID.ready) {
+      L.push(`advection: ${FLUID.CFG.maccormack ? 'MacCormack — second order, sharper' : 'semi-Lagrangian'}`);
+    }
+    /* 60fps only tells you the phone kept up, not by how much — the per-frame
+       cost against the 16.7ms budget is what shows the headroom */
     L.push(`screen: ${Math.round(window.innerWidth)}x${Math.round(window.innerHeight)} css at ${window.devicePixelRatio || 1}x`);
 
     L.push('', 'Where the bars are meant to appear:', '· on the now-playing screen, under the track name',
