@@ -994,7 +994,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '9.0.0';
+const APP_VERSION = '9.1.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -6917,10 +6917,17 @@ const UPD = (() => {
   async function registerPeriodic() {
     try {
       const reg = await navigator.serviceWorker.ready;
+      /* one-off background sync first: it fires as soon as there is a
+         connection, even if periodic sync is never granted */
+      try { if ('sync' in reg) await reg.sync.register('pulse-update-check'); } catch (e) {}
       if (!('periodicSync' in reg)) return 'unsupported';
-      const st = await navigator.permissions.query({ name: 'periodic-background-sync' });
-      if (st.state !== 'granted') return 'not-granted';
-      await reg.periodicSync.register('pulse-update-check', { minInterval: 12 * 60 * 60 * 1000 });
+      /* Some Chrome builds throw on querying this permission name — that is
+         not a refusal, so try the registration regardless. */
+      try {
+        const st = await navigator.permissions.query({ name: 'periodic-background-sync' });
+        if (st.state === 'denied') return 'not-granted';
+      } catch (e) {}
+      await reg.periodicSync.register('pulse-update-check', { minInterval: 3 * 60 * 60 * 1000 });
       return 'registered';
     } catch (e) { return 'failed'; }
   }
@@ -6961,6 +6968,54 @@ const UPD = (() => {
     }, { passive: true });
   }
 
+  const perm = () => ('Notification' in window) ? Notification.permission : 'unsupported';
+
+  /* Asked once, from a real tap, and only when Pulse is actually installed —
+     a permission prompt on a first visit gets refused and then it is refused
+     for good. */
+  function maybeOfferNotifications() {
+    if (perm() !== 'default') return;
+    if (S.settings.notifyAsked) return;
+    const installed = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+    if (!installed) return;
+    setTimeout(() => {
+      if (perm() !== 'default') return;
+      S.settings.notifyAsked = true; saveSettings();
+      actionSheet('Tell you about updates?', [
+        { label: 'Yes, notify me', run: () => askNotify() },
+        { label: 'Not now', run: () => {} }
+      ]);
+    }, 12000);
+  }
+  function notifyCard() {
+    const p = perm();
+    if (p === 'granted') {
+      return `<div class="card muted">Update notifications are <b>on</b>. Pulse posts one in your notification shade when a new build appears.<br>
+        <span class="hint">If they stop arriving, check Android Settings &rarr; Apps &rarr; Pulse &rarr; Battery is set to <b>Unrestricted</b> — battery optimisation is what usually silences a background check.</span></div>`;
+    }
+    if (p === 'denied') {
+      return `<div class="card muted"><b>Notifications are blocked</b> for Pulse. Android will not show the prompt again, so turn them back on in
+        Android Settings &rarr; Apps &rarr; Pulse &rarr; Notifications, then come back and tap the test button.</div>`;
+    }
+    if (p === 'unsupported') return '<div class="card muted">This browser cannot show notifications.</div>';
+    return `<div class="card muted"><b>Update notifications are off.</b> Turn them on and Pulse will post to your notification shade whenever a new build lands.</div>
+      <button class="primary wide" id="updNotify">Turn on update notifications</button>`;
+  }
+
+  async function testNotify() {
+    if (perm() !== 'granted') { const ok2 = await askNotify(); if (!ok2) return; }
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (!reg) { toast('Offline cache not ready yet'); return; }
+      await reg.showNotification('Pulse — test notification', {
+        body: 'This is what an update alert will look like.',
+        icon: './icon-192.png', badge: './icon-192.png', tag: 'pulse-test',
+        vibrate: [40, 60, 40], renotify: true
+      });
+      toast('Sent — swipe down to see it');
+    } catch (e) { toast('Could not post it: ' + (e.message || e)); }
+  }
+
   /* ---------- settings panel ---------- */
   async function renderPanel() {
     const box = $('updBody');
@@ -6976,14 +7031,16 @@ const UPD = (() => {
         Background checks: <b>${esc(per)}</b>
         ${S.settings.repoPrivate ? '<br>Repository is <b>private</b> — checking through the app\'s own cache rather than the GitHub API.' : ''}
       </div>
+      ${notifyCard()}
       <button class="primary wide" id="updNow">Check GitHub for an update</button>
       <div class="row-btns">
-        <button class="ghost" id="updNotify">${Notification && Notification.permission === 'granted' ? 'Notifications are on' : 'Notify me about updates'}</button>
+        <button class="ghost" id="updTest">Send me a test notification</button>
         <button class="ghost" id="updForce">Force reinstall the app files</button>
       </div>
       <p class="hint">You can also pull down on the Library screen to check. Nothing installs by itself — you always get the bar at the top first, and your library is never touched by an update.</p>`;
     $('updNow').onclick = () => check(true);
-    $('updNotify').onclick = () => askNotify();
+    const nb = $('updNotify'); if (nb) nb.onclick = () => askNotify();
+    const tb = $('updTest'); if (tb) tb.onclick = () => testNotify();
     $('updForce').onclick = async () => {
       if (!confirm('Re-download the app files from GitHub and restart? Your music, tags and settings stay exactly as they are.')) return;
       await apply();
@@ -6994,9 +7051,11 @@ const UPD = (() => {
     $('updateApply').onclick = () => apply();
     $('updateLater').onclick = () => $('updateBar').classList.add('hidden');
     initPullToRefresh();
-    if (S.settings.notifyUpdates && 'Notification' in window && Notification.permission === 'granted') registerPeriodic();
-    const age = Date.now() - (S.settings.lastUpdateCheck || 0);
-    if (age > 6 * 3600 * 1000) setTimeout(() => check(false), 5000);
+    if ('Notification' in window && Notification.permission === 'granted') registerPeriodic();
+    /* check on every launch, not only twice a day — opening Pulse is the most
+       reliable moment to notice a new build */
+    setTimeout(() => check(false), 4000);
+    maybeOfferNotifications();
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden && Date.now() - (S.settings.lastUpdateCheck || 0) > 6 * 3600 * 1000) check(false);
     });
