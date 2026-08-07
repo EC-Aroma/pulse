@@ -988,7 +988,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '8.1.0';
+const APP_VERSION = '8.2.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -3318,16 +3318,17 @@ const FX = (() => {
     textPos: 'bottom', textSize: 'tiny', textAlways: true,
     dir: 'v',               // v = bars rise from the bottom, h = bars run from the left
     centreBand: true,       // with a background on, keep the bars to a band across the middle
+    smokeA: '#ff6a1a', smokeB: '#1f8cff',   // the two smoke fronts
     orient: 'auto'          // auto | landscape | portrait (full-screen view)
   };
   const STYLE_PRESETS = {
     Classic:        { shape: 'bars',   palette: 'accent',    bg: 'none' },
     'Rainbow blocks': { shape: 'blocks', palette: 'rainbow', bg: 'none' },
-    'Smoke & 3D':   { shape: 'bars3d', palette: 'accent',    bg: 'smoke' },
     Cyberpunk:      { shape: 'bars3d', palette: 'cyberpunk', bg: 'grid' },
     'Vice City':    { shape: 'mirror', palette: 'vice',      bg: 'police' },
     'Ice arc':      { shape: 'arc',    palette: 'ice',       bg: 'smoke' },
-    'Fire & ice':   { shape: 'bars3d', palette: 'custom',    bg: 'smoke', c1: '#ff3d2e', c2: '#ffb03a', c3: '#2ec5ff' },
+    'Fire & ice':   { shape: 'bars3d', palette: 'custom',    bg: 'realsmoke', c1: '#ff3d2e', c2: '#ffb03a', c3: '#2ec5ff', smokeA: '#ff5a12', smokeB: '#2a7bff' },
+    'Smoke & 3D':   { shape: 'bars3d', palette: 'accent',    bg: 'realsmoke' },
     'Deep space':   { shape: 'bars',   palette: 'ice',       bg: 'space' },
     Nebula:         { shape: 'bars3d', palette: 'rainbow',   bg: 'space' }
   };
@@ -3481,6 +3482,158 @@ const FX = (() => {
     ctx.restore();
   }
 
+  /* ---------- real smoke: curl-noise particles with trails ----------
+     Blobs never look like smoke because smoke is made of filaments, and
+     filaments come from two things: a divergence-free flow field (curl
+     noise, which swirls without ever piling up) and motion trails. So the
+     particles are advected by curl noise onto a canvas that is only
+     partially erased each frame — what is left behind is the wisp. */
+  const RS = {
+    off: null, ctx: null, parts: [], seed: 11, t: 0,
+    sprA: null, sprB: null, key: '', burst: 0
+  };
+
+  /* cheap value noise — hash, then smoothstep between lattice points */
+  function hash2(x, y) {
+    let h = x * 374761393 + y * 668265263;
+    h = (h ^ (h >> 13)) * 1274126177;
+    return ((h ^ (h >> 16)) >>> 0) / 4294967296;
+  }
+  function noise2(x, y) {
+    const xi = Math.floor(x), yi = Math.floor(y);
+    const xf = x - xi, yf = y - yi;
+    const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+    const a = hash2(xi, yi), b = hash2(xi + 1, yi), c = hash2(xi, yi + 1), d = hash2(xi + 1, yi + 1);
+    return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
+  }
+  /* curl of the noise field = a flow that swirls and never converges */
+  function curl(x, y, t, out) {
+    const e = 0.06;
+    const n1 = noise2(x, y + e + t), n2 = noise2(x, y - e + t);
+    const n3 = noise2(x + e, y + t), n4 = noise2(x - e, y + t);
+    out.x = (n1 - n2) / (2 * e);
+    out.y = -(n3 - n4) / (2 * e);
+  }
+
+  function smokeSprite(colour) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const g = c.getContext('2d').createRadialGradient(32, 32, 0, 32, 32, 32);
+    g.addColorStop(0, colour.replace('rgb(', 'rgba(').replace(')', ',.62)'));
+    g.addColorStop(0.45, colour.replace('rgb(', 'rgba(').replace(')', ',.24)'));
+    g.addColorStop(0.75, colour.replace('rgb(', 'rgba(').replace(')', ',.06)'));
+    g.addColorStop(1, colour.replace('rgb(', 'rgba(').replace(')', ',0)'));
+    const cx = c.getContext('2d');
+    cx.fillStyle = g; cx.fillRect(0, 0, 64, 64);
+    return c;
+  }
+  function hexToRgbStr(hex) {
+    const h = String(hex || '').replace('#', '');
+    const n = parseInt(h.length === 3 ? h.split('').map((c) => c + c).join('') : h, 16);
+    if (isNaN(n)) return 'rgb(255,255,255)';
+    return `rgb(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255})`;
+  }
+  function smokeColours() {
+    const st = style();
+    return [st.smokeA || '#ff6a1a', st.smokeB || '#1f8cff'];
+  }
+
+  function rsSpawn(side, w, h) {
+    RS.seed = (RS.seed * 1664525 + 1013904223) % 4294967296;
+    const r1 = RS.seed / 4294967296;
+    RS.seed = (RS.seed * 1664525 + 1013904223) % 4294967296;
+    const r2 = RS.seed / 4294967296;
+    RS.seed = (RS.seed * 1664525 + 1013904223) % 4294967296;
+    const r3 = RS.seed / 4294967296;
+    RS.parts.push({
+      side,
+      x: side > 0 ? 1.06 + r1 * 0.06 : -0.06 - r1 * 0.06,
+      y: 0.04 + r2 * 0.92,
+      vx: -side * (0.05 + r2 * 0.07),
+      push: 0.055 + r1 * 0.075,
+      vy: (r3 - 0.5) * 0.04,
+      life: 0,
+      ttl: 6.0 + r1 * 5.0,
+      r: 0.030 + r2 * 0.045,
+      a: 0.030 + r3 * 0.045
+    });
+  }
+
+  function drawRealSmoke(ctx, w, h, bass, dt) {
+    RS.t += dt * 0.11;
+    /* half resolution keeps 300+ sprites cheap and adds a natural softness */
+    const ow = Math.max(120, Math.round(w / 2)), oh = Math.max(120, Math.round(h / 2));
+    if (!RS.off) { RS.off = document.createElement('canvas'); }
+    if (RS.off.width !== ow || RS.off.height !== oh) {
+      RS.off.width = ow; RS.off.height = oh;
+      RS.ctx = RS.off.getContext('2d');
+    }
+    const o = RS.ctx || (RS.ctx = RS.off.getContext('2d'));
+
+    const [ca, cb] = smokeColours();
+    const key = ca + cb;
+    if (key !== RS.key) {
+      RS.sprA = smokeSprite(hexToRgbStr(ca));
+      RS.sprB = smokeSprite(hexToRgbStr(cb));
+      RS.key = key;
+    }
+
+    /* erase a little of last frame — this is what leaves the wisps behind */
+    o.globalCompositeOperation = 'destination-out';
+    o.fillStyle = `rgba(0,0,0,${(0.105 + dt * 0.6).toFixed(3)})`;
+    o.fillRect(0, 0, ow, oh);
+
+    /* keep the population up; beats push an extra puff in from both sides */
+    if (V.beat > 0.7 && RS.burst <= 0) RS.burst = 8;
+    const want = 260;
+    let n = RS.parts.length < want ? 9 : 0;
+    if (RS.burst > 0) { n += 4; RS.burst--; }
+    while (n-- > 0 && RS.parts.length < 340) rsSpawn(RS.parts.length % 2 ? 1 : -1, w, h);
+
+    const c = { x: 0, y: 0 };
+    const flow = 0.115 + bass * 0.075;
+    /* source-over, not lighter: additive blending turns every orange/blue
+       overlap into white, while real smoke occludes and keeps its colour */
+    o.globalCompositeOperation = 'source-over';
+    for (let i = RS.parts.length - 1; i >= 0; i--) {
+      const p = RS.parts[i];
+      p.life += dt;
+      if (p.life > p.ttl || p.x < -0.3 || p.x > 1.3 || p.y < -0.35 || p.y > 1.35) { RS.parts.splice(i, 1); continue; }
+      /* the flow field: swirls, sampled at a scale that gives finger-sized curls */
+      curl(p.x * 2.3, p.y * 2.3, RS.t, c);
+      /* the target is the swirl plus a steady push towards the middle, so the
+         two fronts always meet somewhere around the bars */
+      /* the swirl dominates; each side adds a gentle inward drift that eases
+         off as it approaches the middle, so the fronts meet over a wide band
+         and tangle rather than collapsing onto one line */
+      const ease = Math.min(1, Math.abs(p.x - 0.5) / 0.34);
+      const tvx = c.x * flow - p.side * p.push * (0.25 + 0.75 * ease);
+      const tvy = c.y * flow - 0.010;
+      const lerp = Math.min(1, dt * 2.6);
+      p.vx += (tvx - p.vx) * lerp;
+      p.vy += (tvy - p.vy) * lerp;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.r += 0.012 * dt;
+
+      const k = p.life / p.ttl;
+      const env = Math.min(1, k * 6) * Math.min(1, (1 - k) * 3);
+      const a = p.a * env * (0.85 + bass * 0.4);
+      if (a <= 0.002) continue;
+      const rad = p.r * Math.max(ow, oh) * (1 + bass * 0.15);
+      o.globalAlpha = a;
+      o.drawImage(p.side > 0 ? RS.sprB : RS.sprA, p.x * ow - rad, p.y * oh - rad, rad * 2, rad * 2);
+    }
+    o.globalAlpha = 1;
+    o.globalCompositeOperation = 'source-over';
+
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(RS.off, 0, 0, w, h);
+    ctx.restore();
+  }
+
   /* ---------- space: parallax stars and slow planets ---------- */
   const SP = { t: 0, stars: null, planets: null, seed: 7 };
   function srnd() {
@@ -3623,7 +3776,8 @@ const FX = (() => {
   }
   function drawBackground(ctx, w, h, bass, dt) {
     const st = style();
-    if (st.bg === 'smoke') { ctx.fillStyle = '#05040a'; ctx.fillRect(0, 0, w, h); drawSmoke(ctx, w, h, bass, dt); }
+    if (st.bg === 'realsmoke') { ctx.fillStyle = '#030308'; ctx.fillRect(0, 0, w, h); drawRealSmoke(ctx, w, h, bass, dt); }
+    else if (st.bg === 'smoke') { ctx.fillStyle = '#05040a'; ctx.fillRect(0, 0, w, h); drawSmoke(ctx, w, h, bass, dt); }
     else if (st.bg === 'grid') drawGrid(ctx, w, h, bass, dt);
     else if (st.bg === 'police') drawPolice(ctx, w, h, bass, dt);
     else if (st.bg === 'space') drawSpace(ctx, w, h, bass, dt);
@@ -3770,18 +3924,20 @@ const FX = (() => {
        them into a band across the middle instead, so the smoke or the
        planets read around the edges — the bars stay the centrepiece. */
     const scenic = (c.id === 'vizBig' || c.id === 'vizPreview') && st.bg !== 'none' && st.centreBand !== false;
-    let band = 0;
+    let band = 0, inset = 0;
     if (scenic) {
       band = Math.round(h * (shape === 'arc' ? 0.55 : 0.46));
+      inset = shape === 'bars3d' ? 0 : Math.round(w * 0.08);
       ctx.save();
-      ctx.translate(0, Math.round((h - band) / 2));
+      ctx.translate(inset, Math.round((h - band) / 2));
     }
     const bh = scenic ? band : h;
+    const bw2 = scenic ? w - inset * 2 : w;
     const sideways = st.dir === 'h' && shape !== 'bars3d';
-    if (sideways) { ctx.save(); ctx.translate(w, 0); ctx.rotate(Math.PI / 2); }
-    const dw = sideways ? bh : w, dh = sideways ? w : bh;
+    if (sideways) { ctx.save(); ctx.translate(bw2, 0); ctx.rotate(Math.PI / 2); }
+    const dw = sideways ? bh : bw2, dh = sideways ? bw2 : bh;
     if (shape === 'blocks') drawBlocks(ctx, dw, dh, bands);
-    else if (shape === 'bars3d') drawBars3D(ctx, w, bh, bands, V.beat);
+    else if (shape === 'bars3d') drawBars3D(ctx, bw2, bh, bands, V.beat);
     else if (shape === 'arc') drawArc(ctx, dw, dh, bands, V.beat);
     else if (shape === 'mirror') drawBars(ctx, dw, dh, bands, true);
     else drawBars(ctx, dw, dh, bands, false);
@@ -4307,9 +4463,14 @@ const FX = (() => {
         </select></label>
       <label class="slider-row">Background
         <select id="stBg">
-          ${[['none', 'Plain black'], ['smoke', 'Colliding smoke'], ['space', 'Planets & stars'], ['grid', 'Neon grid'], ['police', 'Vice City police lights']]
+          ${[['none', 'Plain black'], ['realsmoke', 'Colliding smoke'], ['smoke', 'Pixelised clouds'], ['space', 'Planets & stars'], ['grid', 'Neon grid'], ['police', 'Vice City police lights']]
             .map(([v, l]) => `<option value="${v}" ${st.bg === v ? 'selected' : ''}>${l}</option>`).join('')}
         </select></label>
+      <div class="colour-row" id="stSmokeRow" style="${(st.bg === 'realsmoke' || st.bg === 'smoke') ? '' : 'display:none'}">
+        <label>Smoke 1 <input type="color" id="stSmokeA" value="${st.smokeA || '#ff6a1a'}"></label>
+        <label>Smoke 2 <input type="color" id="stSmokeB" value="${st.smokeB || '#1f8cff'}"></label>
+        <button class="chip" id="stSmokeSwap">Swap</button>
+      </div>
       <label class="switch"><input type="checkbox" id="stBand" ${st.centreBand !== false ? 'checked' : ''}><span>With a background on, keep the bars to the middle</span></label>
       <p class="hint">Backgrounds and 3D only draw on the full-screen visualizer (and the preview below) — the in-app strip stays light on battery.</p>
       ${slider('mVizI', 'Visualizer sensitivity', 0.5, 2.5, 0.1, m.vizIntensity, '×')}
@@ -4434,7 +4595,22 @@ const FX = (() => {
     const stBind = (id, key, after) => { const n = $(id); if (n) n.onchange = () => { style()[key] = n.value; save(); applyTextStyle(); after && after(); }; };
     stBind('stShape', 'shape');
     stBind('stPalette', 'palette', () => { const c = $('stCustom'); if (c) c.style.display = style().palette === 'custom' ? '' : 'none'; });
-    stBind('stBg', 'bg');
+    stBind('stBg', 'bg', () => {
+      const r = $('stSmokeRow');
+      if (r) r.style.display = (style().bg === 'realsmoke' || style().bg === 'smoke') ? '' : 'none';
+    });
+    ['stSmokeA', 'stSmokeB'].forEach((id, i) => {
+      const n = $(id); if (!n) return;
+      n.oninput = () => { style()[i ? 'smokeB' : 'smokeA'] = n.value; save(); };
+    });
+    const swp = $('stSmokeSwap');
+    if (swp) swp.onclick = () => {
+      const st2 = style();
+      const a = st2.smokeA, b = st2.smokeB;
+      st2.smokeA = b; st2.smokeB = a; save();
+      if ($('stSmokeA')) $('stSmokeA').value = st2.smokeA;
+      if ($('stSmokeB')) $('stSmokeB').value = st2.smokeB;
+    };
     stBind('stDir', 'dir');
     stBind('stOrient', 'orient', () => { if (window.VIZFULL && VIZFULL.isOpen()) VIZFULL.applyOrientation(); });
     stBind('stTextPos', 'textPos');
