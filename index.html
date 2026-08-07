@@ -729,6 +729,12 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
             <button class="primary" id="btnReport">Report a problem</button>
             <button class="ghost" id="btnDiagLog">Show recent errors</button>
           </div>
+          <div class="row-btns">
+            <button class="primary" id="btnSpeedTest">Run the speed test</button>
+            <button class="ghost" id="btnLastTest">Show the last result</button>
+            <button class="ghost" id="btnShareTest">Send it to me</button>
+          </div>
+          <p class="hint">The speed test opens the full-screen visualiser for about five seconds, counts real frames, then shows you what your phone actually manages. The result stays here until the next run.</p>
 
           <h3 class="section-h">Backup</h3>
           <p class="hint">Your audio never leaves the phone. This exports/imports just the tags, favorites, playlists, ratings and stats, so you can rebuild your library on another device.</p>
@@ -997,7 +1003,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '9.3.0';
+const APP_VERSION = '9.4.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -2703,6 +2709,22 @@ function wire() {
   $('diagInput').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) { toast('Inspecting…'); VID.diagnose(f); } };
   $('btnPersist').onclick = () => requestPersist(false);
   $('btnBulkRename').onclick = () => RENAME.openBulk();
+  $('btnSpeedTest').onclick = () => FX.selfTest();
+  $('btnLastTest').onclick = () => {
+    const t = S.settings.lastSelfTest;
+    if (!t) { toast('No result yet — run the speed test first'); return; }
+    OPS.showLog(t);
+  };
+  $('btnShareTest').onclick = async () => {
+    const t = S.settings.lastSelfTest;
+    if (!t) { toast('No result yet — run the speed test first'); return; }
+    /* the share sheet is the easiest way to get this off the phone */
+    if (navigator.share) {
+      try { await navigator.share({ title: 'Pulse speed test', text: t }); return; } catch (e) { if (e && e.name === 'AbortError') return; }
+    }
+    try { await navigator.clipboard.writeText(t); toast('Copied — paste it wherever you like'); }
+    catch (e) { OPS.showLog(t); toast('Copy it from here'); }
+  };
 
   /* list delegation */
   document.addEventListener('click', (ev) => {
@@ -5682,6 +5704,7 @@ const FX = (() => {
 
     /* --- speed --- */
     L.push('', 'SPEED');
+    toast('Measuring the frame rate — about 5 seconds');
     /* Measuring from the settings screen would time an idle app. Open the
        full-screen view for the duration so the number is the one that
        matters, then put everything back. */
@@ -5716,7 +5739,13 @@ const FX = (() => {
       '· on the gym HUD, under the buttons', '· full-screen when you tap the bars, or after the idle delay',
       '', `app v${APP_VERSION} · ${navigator.userAgent}`);
     const text = L.join('\n');
+    try {
+      S.settings.lastSelfTest = text;
+      S.settings.lastSelfTestAt = Date.now();
+      saveSettings();
+    } catch (e) {}
     if (window.OPS) OPS.showLog(text);
+    if (window.OPS && OPS.renderConn) OPS.renderConn();
     return text;
   }
 
@@ -6156,9 +6185,21 @@ ${JSON.stringify(r, null, 2)}`;
     const di = $('diagInfo');
     if (di) {
       const n = diag.errors.length;
-      di.innerHTML = n
+      const st = S.settings.lastSelfTest;
+      /* pull the headline numbers out so they are readable without opening
+         the whole report */
+      let head = '';
+      if (st) {
+        const grab = (re) => { const m = st.match(re); return m ? m[0] : ''; };
+        const fps = grab(/frame rate: .*/);
+        const drawn = grab(/background: .*/);
+        head = `<hr style="border:0;border-top:1px solid var(--line);margin:10px 0">
+          <b>Last speed test</b> — ${esc(new Date(S.settings.lastSelfTestAt || Date.now()).toLocaleString())}<br>
+          <span class="muted">${esc(drawn)}<br>${esc(fps)}</span>`;
+      }
+      di.innerHTML = (n
         ? `<b>${n}</b> problem${n === 1 ? '' : 's'} recorded on this device. The newest: <br><span class="muted">${esc(diag.errors[n - 1].msg.slice(0, 160))}</span>`
-        : 'No errors recorded. If something misbehaves, tap <b>Report a problem</b> right after it happens — the report captures what the app was doing at that moment.';
+        : 'No errors recorded. If something misbehaves, tap <b>Report a problem</b> right after it happens — the report captures what the app was doing at that moment.') + head;
     }
   }
   function wire() {
