@@ -1004,7 +1004,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '9.8.0';
+const APP_VERSION = '9.9.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -7676,6 +7676,13 @@ window.UPD = UPD;
    (live sets, concerts, mixes, talks) and pull it in legally.
    ============================================================ */
 const ARCH = (() => {
+  /* one tap each — these are the searches that actually turn up long,
+     high-energy recordings rather than spoken word */
+  const GYM_SEARCHES = [
+    'hardstyle mix', 'techno set', 'drum and bass mix', 'house dj set',
+    'trance classics', 'hard dance live', 'festival set', 'workout mix',
+    'breakbeat mix', 'gabber', 'dubstep mix', 'electro live set'
+  ];
   const SEARCH = 'https://archive.org/advancedsearch.php';
   const META = 'https://archive.org/metadata/';
   const DL = 'https://archive.org/download/';
@@ -7745,6 +7752,9 @@ const ARCH = (() => {
         <label class="fld">Search live sets, concerts, mixes, talks
           <input id="arcQ" type="search" value="${esc(prefill || '')}" placeholder="e.g. house dj set, jazz live 1975, ambient mix"></label>
         <div class="row-btns" style="padding:0"><button class="primary" id="arcGo">Search</button></div>
+        <p class="hint" style="padding:0;margin:10px 0 4px">Straight to the gym stuff:</p>
+        <div class="row-btns" style="padding:0">${GYM_SEARCHES.map((g) =>
+          `<button class="chip" data-arcq="${esc(g)}">${esc(g)}</button>`).join('')}</div>
         <p class="hint" style="padding:0;margin-top:10px">Everything here is uploaded for free distribution — live recordings, netlabel releases, radio shows, concerts. Downloading is what the Archive is for, so it goes straight into your library and works offline.</p>
       </div><div id="arcResults"></div>`;
     openSheet('pickSheet');
@@ -7765,6 +7775,7 @@ const ARCH = (() => {
         $('arcResults').innerHTML = `<div class="empty"><b>Could not reach the Archive</b>${esc(e.message || e)}<br><br>Check you are online, and that "Allow looking up artwork &amp; tags online" style network use is not blocked by airplane-safe mode.</div>`;
       }
     };
+    els('#pkList [data-arcq]').forEach((b) => b.onclick = () => { $('arcQ').value = b.dataset.arcq; run(); });
     $('arcGo').onclick = run;
     $('arcQ').onkeydown = (e) => { if (e.key === 'Enter') run(); };
     if (prefill) run();
