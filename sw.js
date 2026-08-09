@@ -1,7 +1,7 @@
 /* Pulse service worker — offline app shell.
    Your music itself lives in IndexedDB, not here, so the app works
    with zero network once installed. */
-const VERSION = 'pulse-v10.5.0';
+const VERSION = 'pulse-v10.6.0';
 const SHELL = [
   './',
   './index.html',

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-nRE8hgoaEEk3xHZfh+Pgt8mgIQEEyOKQ7flXGV3UwCQ=' 'sha256-9F+r3X4IpAWEDUYkQ+nioykln6v27EPnJNoVgLxDUFE=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-P/EtpcQZ8kGwjc3RBgyrfdohbecIJv6hn8LPKVFzTPM=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-EmHMhTcWN1sJm3YEgfUJ59o+CVUNtVUkqsRNic/TmfY=' 'sha256-rEpaKWoGk5DBaorVIL5+ZHismIt53Lw/yfeU5C7Mu5c=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-7axtG8AnCiY2KFFWLBws828R8uNW+weJqL5klY+9ay8=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1021,7 +1021,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.5.0';
+const APP_VERSION = '10.6.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -3607,7 +3607,9 @@ const FLUID = (() => {
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.useProgram(progs.display.p);
     gl.uniform1i(progs.display.u.uTexture, dye.read.attach(0));
-    if (progs.display.u.exposure) gl.uniform1f(progs.display.u.exposure, 1.0 + bass * 0.35);
+    if (progs.display.u.exposure) {
+      gl.uniform1f(progs.display.u.exposure, (1.0 + bass * 0.35) * (o.bright === undefined ? 1 : o.bright));
+    }
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     return true;
   }
@@ -4255,6 +4257,7 @@ const FX = (() => {
     smokeA: '#ff6a1a', smokeB: '#1f8cff',   // the two smoke fronts
     smokeDetail: 'fine',    // soft | fine | ultra — resolution and particle count
     smokeSpeed: 50,         // 0-100, how fast everything moves
+    smokeBright: 50,        // 0-100, how strongly the smoke is lit
     smokeCount: 2,          // how many smoke fronts, 2 to 4
     smokeC: '#25e5a7', smokeD: '#c85cff',   // the third and fourth fronts
     warpOnBeat: true,       // space: hit light speed on the drops
@@ -4610,7 +4613,7 @@ const FX = (() => {
       const a = p.a * env * (0.85 + bass * 0.4);
       if (a <= 0.002) continue;
       const rad = p.r * D.size * Math.max(ow, oh) * (1 + bass * 0.15);
-      o.globalAlpha = a * D.alpha;
+      o.globalAlpha = Math.min(1, a * D.alpha * brightFactor());
       o.drawImage(p.side > 0 ? RS.sprB : RS.sprA, p.x * ow - rad, p.y * oh - rad, rad * 2, rad * 2);
     }
     o.globalAlpha = 1;
@@ -4649,13 +4652,24 @@ const FX = (() => {
     const n = (v === undefined ? 50 : Math.max(0, Math.min(100, +v))) / 50;
     return n < 1 ? 0.25 + n * 0.75 : 1 + (n - 1) * 2;
   }
+  /* 0-100 maps to barely-lit up to twice as bright. 50 is the natural level,
+     and deliberately a little dimmer than the old fixed one, which blew the
+     dense cores out to white. */
+  function brightFactor() {
+    const v = style().smokeBright;
+    const n = v === undefined ? 50 : Math.max(0, Math.min(100, +v));
+    return n < 50 ? 0.2 + (n / 50) * 0.6 : 0.8 + ((n - 50) / 50) * 1.2;
+  }
   function smokeSources() {
     const st = style();
     const n = Math.max(2, Math.min(4, +st.smokeCount || 2));
     const edges = ['left', 'right', 'bottom', 'top'];
     const cols = [st.smokeA || '#ff6a1a', st.smokeB || '#1f8cff', st.smokeC || '#25e5a7', st.smokeD || '#c85cff'];
     const out = [];
-    for (let i = 0; i < n; i++) out.push({ edge: edges[i], colour: hexToRgbArr(cols[i], 0.55) });
+    /* half the brightness goes into how much dye is injected and half into the
+       exposure, so turning it down thins the smoke as well as dimming it */
+    const g = 0.55 * Math.sqrt(brightFactor());
+    for (let i = 0; i < n; i++) out.push({ edge: edges[i], colour: hexToRgbArr(cols[i], g) });
     return out;
   }
 
@@ -4715,12 +4729,13 @@ const FX = (() => {
     }
     const r = cv.getBoundingClientRect();
     FLUID.resize(Math.max(1, r.width), Math.max(1, r.height));
-    const gain = 0.55;
-    void gain;
+    const bright = Math.sqrt(brightFactor());
+    const gain = 0.55 * bright;
     FLUID.frame(Math.min(0.033, V.dt || 0.016), {
       bass,
       beat: V.beat,
       speed: speedFactor(),
+      bright,
       sources: smokeSources(),
       colourA: hexToRgbArr(st.smokeA || '#ff6a1a', gain),
       colourB: hexToRgbArr(st.smokeB || '#1f8cff', gain)
@@ -5611,6 +5626,7 @@ const FX = (() => {
             .map(([v, l]) => `<option value="${v}" ${(+st.smokeCount || 2) === v ? 'selected' : ''}>${l}</option>`).join('')}
         </select></label>
       ${slider('stSpeed', 'Movement speed', 0, 100, 1, st.smokeSpeed === undefined ? 50 : st.smokeSpeed, '')}
+      ${slider('stBright', 'Brightness', 0, 100, 1, st.smokeBright === undefined ? 50 : st.smokeBright, '')}
       <label class="slider-row" id="stDetailRow" style="${(st.bg === 'realsmoke' || st.bg === 'fluid') ? '' : 'display:none'}">Smoke detail
         <select id="stDetail">
           ${[['soft', 'soft — easiest on the battery'], ['fine', 'fine — sharp wisps'], ['ultra', 'ultra — very fine'], ['extreme', 'extreme — full resolution, for a fast phone']]
@@ -5774,6 +5790,12 @@ const FX = (() => {
       const lab = $('stSpeedv');
       if (lab) lab.textContent = spd2.value === '50' ? 'normal' : (+spd2.value < 50 ? spd2.value + ' · slower' : spd2.value + ' · faster');
     };
+    const brt = $('stBright');
+    if (brt) brt.oninput = () => {
+      style().smokeBright = +brt.value; save();
+      const lab = $('stBrightv');
+      if (lab) lab.textContent = brt.value === '50' ? 'normal' : (+brt.value < 50 ? brt.value + ' · dimmer' : brt.value + ' · brighter');
+    };
     const swp = $('stSmokeSwap');
     if (swp) swp.onclick = () => {
       const st2 = style();
@@ -5926,7 +5948,8 @@ const FX = (() => {
     if (opened) { try { VIZFULL.hide(); } catch (e) {} }
     L.push(`background: ${st.bg} · drawn by: ${renderer}`);
     L.push(`quality: ${st.smokeDetail || 'fine'}${st.bg === 'fluid' && window.FLUID ? ` (grid ${FLUID.CFG.simRes}, dye ${FLUID.CFG.dyeRes}, ${FLUID.CFG.pressureIters} pressure passes)` : ''}`);
-    L.push(`fronts: ${st.smokeCount || 2} · movement speed: ${st.smokeSpeed === undefined ? 50 : st.smokeSpeed}/100`);
+    L.push(`fronts: ${st.smokeCount || 2} · movement speed: ${st.smokeSpeed === undefined ? 50 : st.smokeSpeed}/100` +
+      ` · brightness: ${st.smokeBright === undefined ? 50 : st.smokeBright}/100`);
     L.push(opened ? 'measured with the full-screen visualizer open (opened just for the test)'
                   : wasOpen ? 'measured with the full-screen visualizer open'
                   : 'measured on the current screen — open the full-screen visualizer for the real number');
