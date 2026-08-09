@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-EmHMhTcWN1sJm3YEgfUJ59o+CVUNtVUkqsRNic/TmfY=' 'sha256-rEpaKWoGk5DBaorVIL5+ZHismIt53Lw/yfeU5C7Mu5c=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-7axtG8AnCiY2KFFWLBws828R8uNW+weJqL5klY+9ay8=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-StjN0QkGvFnFhJOhsJ52UStoY1qvV6CeiqzgtazGc5s=' 'sha256-rEpaKWoGk5DBaorVIL5+ZHismIt53Lw/yfeU5C7Mu5c=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-EBDuknhMVlHsX61uCqwigvGdHZ+BbHgLAQC/+JHsmqs=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1021,7 +1021,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.6.0';
+const APP_VERSION = '10.7.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -3093,6 +3093,8 @@ async function boot() {
     try { await navigator.serviceWorker.register('./sw.js'); } catch (e) { console.warn('SW failed', e); }
   }
   setInterval(() => { saveStats(); }, 60000);
+  /* keep the Drive connection alive by itself, so cloud tracks just play */
+  try { if (window.DRIVE && DRIVE.autoConnect) DRIVE.autoConnect(); } catch (e) {}
 }
 boot();
 
@@ -8478,6 +8480,20 @@ const DRIVE = (() => {
     });
   }
 
+  const emailHint = () => (S.settings.driveEmail || '').trim();
+
+  /* Which account granted this? Drive itself will tell us, and knowing it means
+     every later renewal can be silent. Only the address is kept — no token. */
+  async function rememberAccount() {
+    if (emailHint() || !token) return;
+    try {
+      const r = await fetch(API + '/about?fields=user(emailAddress)', { headers: { Authorization: 'Bearer ' + token } });
+      const d = await r.json();
+      const e = d && d.user && d.user.emailAddress;
+      if (e) { S.settings.driveEmail = e; saveSettings(); }
+    } catch (e) {}
+  }
+
   /* a token lasts an hour; ask for a fresh one when it is close to expiry */
   async function auth(interactive) {
     if (!clientId()) throw new Error('no-client-id');
@@ -8488,10 +8504,14 @@ const DRIVE = (() => {
         client = google.accounts.oauth2.initTokenClient({
           client_id: clientId(),
           scope: SCOPE,
+          /* naming the account that granted access last time lets Google renew
+             silently instead of showing the account chooser again */
+          hint: emailHint() || undefined,
           callback: (res) => {
             if (res && res.access_token) {
               token = res.access_token; tokenAt = Date.now();
               shareToken();
+              rememberAccount();
               resolve(token);
             } else reject(new Error('Sign-in was cancelled'));
           },
@@ -8531,6 +8551,28 @@ const DRIVE = (() => {
     navigator.serviceWorker.addEventListener('controllerchange', () => shareToken());
     navigator.serviceWorker.ready.then(() => shareToken());
   } catch (e) {}
+
+  /* ---------- staying connected ----------
+     A Drive key lasts an hour and is never written to disk, so left alone the
+     app would make you sign in again every time you open it. Instead: renew
+     quietly in the background whenever there is cloud music to play, and top
+     the key up before it expires while the app is open. Nothing is stored —
+     Google is simply asked again, without a prompt, using the account that
+     granted access last time. */
+  let renewTimer = 0;
+  async function quietRenew() {
+    if (!clientId()) return false;
+    if (!T.list().some((t) => t.driveId && !t.hasBlob)) return false;   /* no cloud music: don't bother Google */
+    if (token && Date.now() - tokenAt < 45 * 60 * 1000) { shareToken(); return true; }
+    try { await auth(false); shareToken(); return true; } catch (e) { return false; }
+  }
+  function autoConnect() {
+    if (S.settings.driveAuto === false) return;      /* on unless turned off */
+    setTimeout(quietRenew, 1200);          /* let the app finish opening first */
+    clearInterval(renewTimer);
+    renewTimer = setInterval(quietRenew, 10 * 60 * 1000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) quietRenew(); });
+  }
 
   /* ---------- cloud check ----------
      Everything that has to line up for a cloud track to play, tested for real
@@ -8609,6 +8651,8 @@ const DRIVE = (() => {
     L.push('worker says:        ' + (w ? w.note : '—'));
     L.push('app has a key:      ' + (token ? 'yes, ' + Math.round((Date.now() - tokenAt) / 1000) + 's old' : 'no — connect in Google Drive folder'));
     L.push('client ID set:      ' + (clientId() ? 'yes' : 'NO — paste it in Google Drive folder'));
+    L.push('account:            ' + (emailHint() || 'not known yet — connect once'));
+    L.push('reconnects itself:  ' + (S.settings.driveAuto === false ? 'off' : 'on'));
     L.push('folder name:        ' + folderName());
     L.push('cloud tracks:       ' + T.list().filter((x) => x.driveId && !x.hasBlob).length);
     L.push('online:             ' + (navigator.onLine ? 'yes' : 'no'));
@@ -8727,6 +8771,11 @@ const DRIVE = (() => {
           <input id="drvFolder" value="${esc(folderName())}"></label>
         <label class="fld">OAuth client ID
           <input id="drvId" placeholder="1234-abcd.apps.googleusercontent.com" value="${esc(clientId())}"></label>
+        <label class="switch"><input type="checkbox" id="drvAuto" ${S.settings.driveAuto === false ? '' : 'checked'}>
+          <span>Reconnect on its own${emailHint() ? ' as ' + esc(emailHint()) : ''}</span></label>
+        <p class="hint" style="padding:0">Google only issues a pass that lasts an hour, and Pulse never writes it down.
+          With this on, Pulse quietly asks for a new one when you open the app and before the old one runs out,
+          so you are not signing in every time. Turn it off and you will be asked by hand instead.</p>
         <p class="hint" style="padding:0">One-off setup. Without it Google has no way to know which app is asking.
           Tap <b>How do I get one?</b> and I walk you through it.</p>
         <div class="row-btns" style="padding:0">
@@ -8742,6 +8791,11 @@ const DRIVE = (() => {
       saveSettings();
     };
     $('drvHelp').onclick = () => helpSheet();
+    $('drvAuto').onchange = (ev) => {
+      S.settings.driveAuto = ev.target.checked; saveSettings();
+      if (ev.target.checked) { autoConnect(); toast('Pulse will keep itself connected'); }
+      else toast('You will be asked to connect by hand');
+    };
     $('drvGo').onclick = async () => {
       save2();
       if (!clientId()) { toast('Paste the client ID first'); return; }
@@ -8805,7 +8859,7 @@ const DRIVE = (() => {
     );
   }
 
-  return { open, listTracks, download, addStream, shareToken, ensureStreamReady, check, explain };
+  return { open, listTracks, download, addStream, shareToken, ensureStreamReady, check, explain, autoConnect, quietRenew };
 })();
 window.DRIVE = DRIVE;
 
