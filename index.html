@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-+f3ltWc0i2JsNUcT5priUT8KHZrK8B6NSYrIxXBHFUw=' 'sha256-9F+r3X4IpAWEDUYkQ+nioykln6v27EPnJNoVgLxDUFE=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-BUcqCE6D27hMkPZpjpPU3XU4UZz6mJOf8F3ZZbsCTAw=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-uLfwurFWfLcbrI0A42kFsXtbIh1Q27Tn8VvbROFigt0=' 'sha256-9F+r3X4IpAWEDUYkQ+nioykln6v27EPnJNoVgLxDUFE=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-EzdDF2mE3OYFJwfUzMDeRt7xVSHRtWK6rl4dQYUVfao=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1013,7 +1013,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.3.0';
+const APP_VERSION = '10.3.1';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -1570,6 +1570,13 @@ async function loadCurrent(autoplay) {
   const id = P.queue[P.qi];
   const t = T.get(id);
   if (!t) { toast('Track missing'); return; }
+  /* a cloud track streams through our own service worker, which needs a live
+     Drive token before the very first byte is asked for */
+  if (t.driveId && !t.hasBlob && window.DRIVE && DRIVE.ensureStreamReady) {
+    /* best effort — never block the attempt, the worker can ask for a token
+       on its own and a genuine failure is reported by the error handler */
+    try { await DRIVE.ensureStreamReady(); } catch (e) {}
+  }
   const url = await trackUrl(id);
   if (!url) { toast('Audio data missing for this track'); return; }
   /* pick the plain fallback element for links the server won't share cross-origin */
@@ -1672,6 +1679,10 @@ async function startCrossfade(remaining) {
     if (e !== P.el()) return;
     const t = T.get(P.queue[P.qi]);
     /* a cross-origin stream that refuses CORS: retry on the plain element */
+    if (t && t.driveId && !t.hasBlob) {
+      toast('Drive would not send that track — open Settings, App, Google Drive folder and connect again');
+      return;
+    }
     if (t && t.streamUrl && !t.hasBlob && t.corsOk !== false && k !== 's') {
       t.corsOk = false; await T.save(t);
       toast('Streaming without sound processing (this server blocks app access)');
@@ -8435,6 +8446,29 @@ const DRIVE = (() => {
   /* and again whenever the app is brought back up */
   document.addEventListener('visibilitychange', () => { if (!document.hidden) shareToken(); });
 
+  /* the worker asking for a token it has lost */
+  try {
+    navigator.serviceWorker.addEventListener('message', async (e) => {
+      if (!e.data || e.data.type !== 'need-drive-token') return;
+      try {
+        if (!token || Date.now() - tokenAt > 50 * 60 * 1000) await auth(false);
+        shareToken();
+      } catch (err) { /* not signed in — the player will report it */ }
+    });
+  } catch (e) {}
+
+  /* Called before a cloud track loads, so the very first byte has a token.
+     Best-effort on purpose: if the token we hold is still good we just hand it
+     over, and if a refresh fails we let the attempt proceed anyway — the worker
+     can ask for one itself, and a real failure surfaces as a clear message
+     rather than a track that silently refuses to start. */
+  async function ensureStreamReady() {
+    if (token && Date.now() - tokenAt < 50 * 60 * 1000) { shareToken(); return true; }
+    if (!clientId()) return false;
+    try { await auth(false); shareToken(); return true; }
+    catch (e) { return false; }
+  }
+
   async function api(path) {
     const t = await auth(false);
     const r = await fetch(API + path, { headers: { Authorization: 'Bearer ' + t } });
@@ -8592,7 +8626,7 @@ const DRIVE = (() => {
     );
   }
 
-  return { open, listTracks, download, addStream, shareToken };
+  return { open, listTracks, download, addStream, shareToken, ensureStreamReady };
 })();
 window.DRIVE = DRIVE;
 

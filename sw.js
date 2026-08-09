@@ -1,7 +1,7 @@
 /* Pulse service worker — offline app shell.
    Your music itself lives in IndexedDB, not here, so the app works
    with zero network once installed. */
-const VERSION = 'pulse-v10.3.0';
+const VERSION = 'pulse-v10.3.1';
 const SHELL = [
   './',
   './index.html',
@@ -42,17 +42,40 @@ self.addEventListener('message', (e) => {
    request to Google, passing the Range through untouched. That is what makes
    seeking work: the browser asks for the byte range it wants and gets a 206
    back, the same as it would from any ordinary media server. */
+/* A worker is stopped whenever the phone decides it is idle, and the token
+   goes with it. Rather than fail, ask the app for a fresh one and wait a
+   moment — the player only ever sees a slightly slower first byte. */
+async function askClientsForToken() {
+  try {
+    const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    if (!all.length) return null;
+    all.forEach((c) => c.postMessage({ type: 'need-drive-token' }));
+    for (let i = 0; i < 30 && !driveToken; i++) await new Promise((r) => setTimeout(r, 100));
+  } catch (e) {}
+  return driveToken;
+}
+
 async function driveStream(req, url) {
   const id = decodeURIComponent(url.pathname.split('/drive-stream/')[1] || '');
   if (!id) return new Response('No file', { status: 400 });
+  if (!driveToken) await askClientsForToken();
   if (!driveToken) return new Response('Not connected to Drive', { status: 401 });
-  const headers = { Authorization: 'Bearer ' + driveToken };
   const range = req.headers.get('range');
-  if (range) headers.Range = range;
+  const call = () => {
+    const headers = { Authorization: 'Bearer ' + driveToken };
+    if (range) headers.Range = range;
+    return fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(id) + '?alt=media',
+      { headers, cache: 'no-store' });
+  };
   let r;
   try {
-    r = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(id) + '?alt=media',
-      { headers, cache: 'no-store' });
+    r = await call();
+    /* an hour-old token: bin it, ask for a new one, try once more */
+    if (r.status === 401 || r.status === 403) {
+      driveToken = null;
+      await askClientsForToken();
+      if (driveToken) r = await call();
+    }
   } catch (e) {
     return new Response('Drive unreachable', { status: 504 });
   }
