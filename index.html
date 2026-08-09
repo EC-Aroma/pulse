@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-Qje3XkVaWVULaZGk4et2asXVa6nt6kp/ixtYp0kzZJM=' 'sha256-9F+r3X4IpAWEDUYkQ+nioykln6v27EPnJNoVgLxDUFE=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-RI+3BC01giGxM1MqIPgDxvToFwEpknGt77LM0Jm6ZJY=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1012,7 +1013,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.1.0';
+const APP_VERSION = '10.2.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -1140,7 +1141,7 @@ function normGenre(g) {
   const m = g.match(/^\((\d+)\)\s*(.*)$/);
   if (m) return m[2] || ID3_GENRES[+m[1]] || '';
   if (/^\d+$/.test(g)) return ID3_GENRES[+g] || '';
-  return g.replace(/ /g, ' / ');
+  return g.replace(/\u0000/g, ' / ');
 }
 
 function parseID3v2(view, u8) {
@@ -8423,7 +8424,7 @@ const DRIVE = (() => {
   }
 
   async function findFolder() {
-    const q = `mimeType='application/vnd.google-apps.folder' and name='${folderName().replace(/'/g, "\\'")}' and trashed=false`;
+    const q = `mimeType='application/vnd.google-apps.folder' and name='${folderName().replace(/\\/g, '\\\\').replace(/'/g, "\\'")}' and trashed=false`;
     const d = await api(`/files?q=${encodeURIComponent(q)}&fields=files(id,name)&pageSize=5`);
     return (d.files || [])[0] || null;
   }
