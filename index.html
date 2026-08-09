@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-7Mbb/+jOmX3QN/AwHQcEZBbUVo2TSCNbpMkKLCeChbk=' 'sha256-e+uOyCwVVU+u0gI+OvQShZbkUPGElw9tJJj9FLuw4+0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-/4BgvxeZq4g9Rz5qTQmIOr3WngV2rdMuyYIhySXvdnc=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-ESUfxUFLdW2YEY0YnMlYPlMIEUdWXCySrem90fBXsFw=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-2FLEgDA+VS8FlbONLRCoYM2n20hxa+s+TqZ6x+OMdQY=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1021,7 +1021,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.8.0';
+const APP_VERSION = '10.9.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -3333,16 +3333,28 @@ const FLUID = (() => {
       uniform float value;
       void main() { outColor = value * texture(uTexture, vUv); }`,
 
-    /* a little tone shaping so the dye reads as lit smoke on black */
+    /* Tone shaping that keeps the colour.
+       Compressing each channel on its own is what turned dense smoke white:
+       once red is pinned at 1.0, green and blue catch up and every thick patch
+       bleaches. So compress the BRIGHTNESS only and scale the channels by the
+       same factor — the ratio between them, which is the hue, survives at any
+       density. Orange stays orange however thick it gets. */
     display: F_HEAD + `
       uniform sampler2D uTexture;
       uniform float exposure;
       void main() {
-        vec3 c = texture(uTexture, vUv).rgb * exposure;
-        c = max(c, 0.0);
-        /* soft shoulder: keeps dense cores from clipping to white */
-        c = c / (1.0 + c * 0.55);
-        float a = clamp(max(c.r, max(c.g, c.b)) * 1.35, 0.0, 1.0);
+        vec3 c = max(texture(uTexture, vUv).rgb, 0.0) * exposure;
+        /* Where two fronts have piled up on each other the dye holds a grey
+           component — sum enough colours and everything trends to washed out.
+           Taking part of that common floor away lets the dominant colour of
+           each patch read through, so collisions look like coloured smoke
+           tangling rather than fog. */
+        float mn = min(c.r, min(c.g, c.b));
+        c = max(c - mn * 0.4, 0.0);
+        float m = max(c.r, max(c.g, c.b));
+        float t = m / (1.0 + m);              /* never reaches 1: never white */
+        c *= m > 1e-5 ? t / m : 0.0;
+        float a = clamp(t * 1.5, 0.0, 1.0);
         outColor = vec4(c, a);
       }`
   };
@@ -5154,7 +5166,7 @@ const FX = (() => {
     if (mode === 'off' || !window.FLUID || !FLUID.ready || !FLUID.stir) return;
     const n = bands.length;
     const push = mode === 'light' ? 0 : 1;
-    const lightGain = mode === 'push' ? 0 : 0.14 * brightFactor();
+    const lightGain = mode === 'push' ? 0 : 0.07 * brightFactor();
     const spd = speedFactor();
     /* Each jet costs the GPU real work, so take the twelve bars with most to
        say this frame — the ones that are loud or have just jumped — and stir
