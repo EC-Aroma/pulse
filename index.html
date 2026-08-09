@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-9L3ctUKIuymR60aHgNGQOukzgSSdbb5grBV8po5mEc0=' 'sha256-9F+r3X4IpAWEDUYkQ+nioykln6v27EPnJNoVgLxDUFE=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-MPKCxX40KAve8DjfiTvfIiTykyWXEUcx3RnvwMvIRPo=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-nRE8hgoaEEk3xHZfh+Pgt8mgIQEEyOKQ7flXGV3UwCQ=' 'sha256-9F+r3X4IpAWEDUYkQ+nioykln6v27EPnJNoVgLxDUFE=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-P/EtpcQZ8kGwjc3RBgyrfdohbecIJv6hn8LPKVFzTPM=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1021,7 +1021,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.4.0';
+const APP_VERSION = '10.5.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -8533,19 +8533,43 @@ const DRIVE = (() => {
       const r = await fetch(track.streamUrl, { headers: { Range: 'bytes=0-1' }, cache: 'no-store' });
       if (r.status === 200 || r.status === 206) {
         const b = await r.arrayBuffer();
-        return `worked — ${r.status}, ${b.byteLength} bytes, type ${r.headers.get('content-type') || 'unknown'}`;
+        return `worked — ${r.status}, ${b.byteLength} bytes, type ${r.headers.get('content-type') || 'unknown'}` +
+          `, range ${r.headers.get('content-range') || 'MISSING'}`;
       }
       const txt = (await r.text()).slice(0, 300);
       return `failed — ${r.status} ${txt}`;
     } catch (e) { return 'failed — ' + ((e && e.message) || e); }
   }
 
+  /* Fetching bytes and actually playing them are different tests: the media
+     stack is far fussier than fetch. This one asks the player itself. */
+  function tryPlay(track) {
+    return new Promise((resolve) => {
+      if (!track || !track.streamUrl) return resolve('no cloud track to test');
+      const a = new Audio();
+      let done = false;
+      const end = (m) => { if (done) return; done = true; try { a.src = ''; } catch (e) {} resolve(m); };
+      a.preload = 'metadata';
+      a.onloadedmetadata = () => end(`the player accepted it — ${isFinite(a.duration) ? Math.round(a.duration) + 's long' : 'length unknown'}`);
+      a.onerror = () => {
+        const c = a.error ? a.error.code : 0;
+        const names = { 1: 'aborted', 2: 'network', 3: 'could not decode the audio', 4: 'the player refused this response' };
+        end(`the player refused it — ${names[c] || 'error ' + c}${a.error && a.error.message ? ' (' + a.error.message + ')' : ''}`);
+      };
+      setTimeout(() => end('the player is still waiting after 10 seconds'), 10000);
+      a.src = track.streamUrl;
+      a.load();
+    });
+  }
+
   async function explain(track) {
     const w = await askWorker();
     if (!w) return 'The app’s background worker is not running yet. Close Pulse fully and open it again.';
     const p = await probe(track);
-    if (p.startsWith('worked')) return 'Drive is answering fine now — try playing it again.';
-    return p.replace(/^failed — /, '');
+    if (!p.startsWith('worked')) return p.replace(/^failed — /, '');
+    const pl = await tryPlay(track);
+    if (pl.startsWith('the player accepted')) return 'Drive is answering fine now — try playing it again.';
+    return 'Drive sends the file but ' + pl + '. Settings, App, Cloud check has the detail.';
   }
 
   async function check() {
@@ -8566,12 +8590,17 @@ const DRIVE = (() => {
     L.push('cloud tracks:       ' + T.list().filter((x) => x.driveId && !x.hasBlob).length);
     L.push('online:             ' + (navigator.onLine ? 'yes' : 'no'));
     L.push('');
+    const pl = p.startsWith('worked') ? await tryPlay(t) : 'not tried — the fetch already failed';
     L.push('test track:         ' + (t ? t.title : 'none in the library'));
+    L.push('address:            ' + (t ? t.streamUrl : '—'));
     L.push('fetching 2 bytes:   ' + p);
+    L.push('handing to player:  ' + pl);
     L.push('');
     if (!w) L.push('→ The worker is what talks to Drive. It is not there. Swipe Pulse away from recents, open it again, then run this check.');
     else if (!clientId()) L.push('→ No client ID, so Google has no idea who is asking. Settings, App, Google Drive folder.');
-    else if (p.startsWith('worked')) L.push('→ Everything works. Playback should be fine — if it is not, tell me and send this report.');
+    else if (/range MISSING/.test(p)) L.push('→ The worker is answering without a Content-Range, which the player will always reject. That is a bug in the app, not your setup — send me this report.');
+    else if (p.startsWith('worked') && pl.startsWith('the player accepted')) L.push('→ Everything works. Playback should be fine — if it is not, tell me and send this report.');
+    else if (p.startsWith('worked')) L.push('→ Drive sends the file but the player will not take it. Send me this report — the line above says why.');
     else if (/401/.test(p)) L.push('→ The key is missing or stale. Open Google Drive folder and press Connect once, then run this again.');
     else if (/403/.test(p)) L.push('→ Google is refusing the file. Usually the account you signed in with cannot see that folder, or the Drive API is not enabled on the project.');
     else if (/404/.test(p)) L.push('→ The file is not there any more — it was moved, renamed or deleted in Drive. Re-add it from the folder list.');
@@ -8647,7 +8676,10 @@ const DRIVE = (() => {
       playCount: 0, lastPlayed: 0, duration: 0, addedAt: Date.now(),
       fileName: f.name, mime: f.mimeType || 'audio/mpeg', size: +f.size || 0,
       artId: null, drop: 0,
-      streamUrl: './drive-stream/' + encodeURIComponent(f.id),
+      /* the size and type travel with the address so the worker can write a
+         correct Content-Range without a second call to Drive */
+      streamUrl: './drive-stream/' + encodeURIComponent(f.id) +
+        '?size=' + (+f.size || 0) + '&mime=' + encodeURIComponent(f.mimeType || 'audio/mpeg'),
       driveId: f.id, hasBlob: false, sourceUrl: ''
     };
     S.tracks.set(id, track);

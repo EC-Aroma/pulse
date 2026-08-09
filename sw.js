@@ -1,7 +1,7 @@
 /* Pulse service worker — offline app shell.
    Your music itself lives in IndexedDB, not here, so the app works
    with zero network once installed. */
-const VERSION = 'pulse-v10.4.0';
+const VERSION = 'pulse-v10.5.0';
 const SHELL = [
   './',
   './index.html',
@@ -70,8 +70,24 @@ async function askClientsForToken() {
   return driveToken;
 }
 
+/* How big is the file? Needed to write a correct Content-Range (see below).
+   The app puts it in the address for new tracks; older ones we ask Drive once
+   and remember. */
+const driveSizes = new Map();
+async function driveSize(id) {
+  if (driveSizes.has(id)) return driveSizes.get(id);
+  try {
+    const r = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(id) + '?fields=size',
+      { headers: { Authorization: 'Bearer ' + driveToken }, cache: 'no-store' });
+    const d = await r.json();
+    const n = +d.size || 0;
+    if (n) driveSizes.set(id, n);
+    return n;
+  } catch (e) { return 0; }
+}
+
 async function driveStream(req, url) {
-  const id = decodeURIComponent(url.pathname.split('/drive-stream/')[1] || '');
+  const id = decodeURIComponent((url.pathname.split('/drive-stream/')[1] || '').split('?')[0]);
   if (!id) return new Response('No file id in the address', { status: 400 });
   if (!driveToken) {
     driveNote = 'no key in memory — asked the app for one';
@@ -111,12 +127,36 @@ async function driveStream(req, url) {
     driveNote = 'could not reach Google at all: ' + ((e && e.message) || e);
     return new Response(driveNote, { status: 504 });
   }
+  /* Rebuild the headers rather than copy them.
+     Google answers us across origins, and a cross-origin response only lets
+     script read the handful of CORS-safelisted headers — Content-Type and
+     Content-Length are on that list, Content-Range is not. So a 206 arrives
+     here with its Content-Range invisible, and a 206 without one is invalid:
+     Chrome's media stack rejects it outright, which is a track that fetches
+     perfectly but refuses to play. We know the range we asked for and the
+     size of the file, so we write the header ourselves. */
   const h = new Headers();
-  ['content-type', 'content-length', 'content-range'].forEach((k) => {
-    const v = r.headers.get(k);
-    if (v) h.set(k, v);
-  });
-  if (!h.get('content-type')) h.set('content-type', 'audio/mpeg');
+  const type = r.headers.get('content-type');
+  h.set('content-type', (!type || /octet-stream/i.test(type))
+    ? (url.searchParams.get('mime') || 'audio/mpeg') : type);
+  const len = +r.headers.get('content-length') || 0;
+  let total = +url.searchParams.get('size') || 0;
+  if (!total) total = await driveSize(id);
+
+  if (r.status === 206) {
+    const passed = r.headers.get('content-range');       /* if it is visible, trust it */
+    if (passed) h.set('content-range', passed);
+    else {
+      const m = /bytes=(\d*)-(\d*)/.exec(range || '');
+      const start = m && m[1] !== '' ? +m[1] : 0;
+      const end = len ? start + len - 1
+        : (m && m[2] !== '' ? +m[2] : (total ? total - 1 : start));
+      h.set('content-range', 'bytes ' + start + '-' + end + '/' + (total || (end + 1)));
+    }
+    if (len) h.set('content-length', String(len));
+  } else if (len) h.set('content-length', String(len));
+  else if (total) h.set('content-length', String(total));
+
   h.set('accept-ranges', 'bytes');           /* tell the player it may seek */
   return new Response(r.body, { status: r.status, statusText: r.statusText, headers: h });
 }
