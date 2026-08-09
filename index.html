@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-Qje3XkVaWVULaZGk4et2asXVa6nt6kp/ixtYp0kzZJM=' 'sha256-9F+r3X4IpAWEDUYkQ+nioykln6v27EPnJNoVgLxDUFE=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-RI+3BC01giGxM1MqIPgDxvToFwEpknGt77LM0Jm6ZJY=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-+f3ltWc0i2JsNUcT5priUT8KHZrK8B6NSYrIxXBHFUw=' 'sha256-9F+r3X4IpAWEDUYkQ+nioykln6v27EPnJNoVgLxDUFE=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-BUcqCE6D27hMkPZpjpPU3XU4UZz6mJOf8F3ZZbsCTAw=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1013,7 +1013,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.2.0';
+const APP_VERSION = '10.3.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -5903,7 +5903,12 @@ const FX = (() => {
     setTrackGain(track);
     startViz();
   }
-  function onPlayState() { build(); keepAlive(); startViz(); }
+  function onPlayState() {
+    build(); keepAlive(); startViz();
+    /* the worker may have been stopped since last time — give it the token
+       again so cloud tracks keep streaming */
+    try { if (window.DRIVE) DRIVE.shareToken(); } catch (e) {}
+  }
 
   function init() {
     mix();
@@ -8405,8 +8410,11 @@ const DRIVE = (() => {
           client_id: clientId(),
           scope: SCOPE,
           callback: (res) => {
-            if (res && res.access_token) { token = res.access_token; tokenAt = Date.now(); resolve(token); }
-            else reject(new Error('Sign-in was cancelled'));
+            if (res && res.access_token) {
+              token = res.access_token; tokenAt = Date.now();
+              shareToken();
+              resolve(token);
+            } else reject(new Error('Sign-in was cancelled'));
           },
           error_callback: (e) => reject(new Error((e && e.type) || 'Sign-in failed'))
         });
@@ -8414,6 +8422,18 @@ const DRIVE = (() => {
       } catch (e) { reject(e); }
     });
   }
+
+  /* the worker needs the token to stream on our behalf */
+  function shareToken() {
+    if (!token) return;
+    try {
+      if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({ type: 'drive-token', token });
+      }
+    } catch (e) {}
+  }
+  /* and again whenever the app is brought back up */
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) shareToken(); });
 
   async function api(path) {
     const t = await auth(false);
@@ -8454,6 +8474,37 @@ const DRIVE = (() => {
     return new File([blob], f.name, { type: f.mimeType || 'audio/mpeg' });
   }
 
+  /* A streamed track keeps no audio on the phone: its URL points at the
+     service worker, which fetches from Drive on demand. Saving it offline
+     later goes through the very same URL, so nothing special is needed. */
+  async function addStream(f) {
+    const existing = T.list().find((t) => t.driveId === f.id);
+    if (existing) { toast('Already in your library'); return existing.id; }
+    const id = uid();
+    const clean = (f.name || 'Drive track').replace(/\.[a-z0-9]{2,5}$/i, '').trim();
+    const track = {
+      id, title: clean, artist: 'Google Drive', album: folderName(),
+      albumArtist: 'Google Drive', genre: 'Cloud', year: null,
+      trackNo: null, bpm: null, energy: 0, tags: ['drive'], fav: false,
+      playCount: 0, lastPlayed: 0, duration: 0, addedAt: Date.now(),
+      fileName: f.name, mime: f.mimeType || 'audio/mpeg', size: +f.size || 0,
+      artId: null, drop: 0,
+      streamUrl: './drive-stream/' + encodeURIComponent(f.id),
+      driveId: f.id, hasBlob: false, sourceUrl: ''
+    };
+    S.tracks.set(id, track);
+    await DB.put('tracks', track);
+    render();
+    return id;
+  }
+
+  async function addAllStreams(files) {
+    let n = 0;
+    for (const f of files) { if (await addStream(f)) n++; }
+    toast(`${n} added — playing from Drive, nothing stored`);
+    render();
+  }
+
   /* ---------- screen ---------- */
   async function open() {
     $('pkTitle').textContent = 'Google Drive';
@@ -8488,12 +8539,16 @@ const DRIVE = (() => {
         if (!files.length) { $('drvList').innerHTML = `<div class="empty"><b>Folder is empty</b>Nothing playable in “${esc(folderName())}”.</div>`; return; }
         const total = files.reduce((a, f) => a + (+f.size || 0), 0);
         $('drvList').innerHTML = `<div class="pad"><div class="card muted">${files.length} track${files.length > 1 ? 's' : ''} · ${(total / 1e9).toFixed(2)} GB in the folder</div>
-            <div class="row-btns" style="padding:0"><button class="primary" id="drvAll">Download all into my library</button></div></div>` +
+            <div class="row-btns" style="padding:0">
+              <button class="primary" id="drvAllStream">Add all — play from Drive</button>
+              <button class="ghost" id="drvAll">Download all for offline</button>
+            </div>
+            <p class="hint" style="padding:0;margin-top:8px">Tap a track to add it as a <b>cloud track</b> — it plays straight from Drive and uses no space on the phone, but needs a connection. Tap <b>&darr;</b> to keep a copy for the gym instead.</p></div>` +
           files.map((f, i) => `<div class="row" data-drv="${i}">
             <div class="art sm"></div>
             <div class="r-meta"><div class="r-title">${esc(f.name)}</div>
               <div class="r-sub">${f.size ? ((+f.size) / 1e6).toFixed(1) + ' MB' : ''}</div></div>
-            <div class="r-right">↓</div></div>`).join('');
+            <button class="icon-btn" data-drvdl="${i}" aria-label="Download for offline">&darr;</button></div>`).join('');
         const grab = async (list) => {
           let n = 0;
           for (const f of list) {
@@ -8504,7 +8559,15 @@ const DRIVE = (() => {
           toast(`Done — ${n} added`);
           render();
         };
-        els('#drvList [data-drv]').forEach((n) => n.onclick = () => grab([files[+n.dataset.drv]]));
+        els('#drvList [data-drv]').forEach((n) => n.onclick = async () => {
+          await addStream(files[+n.dataset.drv]);
+          toast('Added — plays from Drive, no space used');
+        });
+        els('#drvList [data-drvdl]').forEach((n) => n.onclick = (ev) => {
+          ev.stopPropagation();
+          grab([files[+n.dataset.drvdl]]);
+        });
+        $('drvAllStream').onclick = () => addAllStreams(files);
         $('drvAll').onclick = () => grab(files);
       } catch (e) {
         const msg = (e && e.message) || String(e);
@@ -8529,7 +8592,7 @@ const DRIVE = (() => {
     );
   }
 
-  return { open, listTracks, download };
+  return { open, listTracks, download, addStream, shareToken };
 })();
 window.DRIVE = DRIVE;
 

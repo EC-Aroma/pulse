@@ -1,7 +1,7 @@
 /* Pulse service worker — offline app shell.
    Your music itself lives in IndexedDB, not here, so the app works
    with zero network once installed. */
-const VERSION = 'pulse-v10.2.0';
+const VERSION = 'pulse-v10.3.0';
 const SHELL = [
   './',
   './index.html',
@@ -27,9 +27,44 @@ self.addEventListener('activate', (e) => {
   );
 });
 
+/* The page hands the worker its Drive token so audio can be streamed rather
+   than downloaded. Kept in memory here, exactly as it is in the page — it is
+   never written to a cache or IndexedDB, and it dies with the worker. */
+let driveToken = null;
 self.addEventListener('message', (e) => {
-  if (e.data === 'skipWaiting') self.skipWaiting();
+  if (e.data === 'skipWaiting') { self.skipWaiting(); return; }
+  if (e.data && e.data.type === 'drive-token') driveToken = e.data.token || null;
 });
+
+/* Play straight from Drive with no copy on the phone.
+   The <audio> element cannot send an Authorization header, so it asks this
+   worker for a local URL instead; the worker adds the header and forwards the
+   request to Google, passing the Range through untouched. That is what makes
+   seeking work: the browser asks for the byte range it wants and gets a 206
+   back, the same as it would from any ordinary media server. */
+async function driveStream(req, url) {
+  const id = decodeURIComponent(url.pathname.split('/drive-stream/')[1] || '');
+  if (!id) return new Response('No file', { status: 400 });
+  if (!driveToken) return new Response('Not connected to Drive', { status: 401 });
+  const headers = { Authorization: 'Bearer ' + driveToken };
+  const range = req.headers.get('range');
+  if (range) headers.Range = range;
+  let r;
+  try {
+    r = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(id) + '?alt=media',
+      { headers, cache: 'no-store' });
+  } catch (e) {
+    return new Response('Drive unreachable', { status: 504 });
+  }
+  const h = new Headers();
+  ['content-type', 'content-length', 'content-range'].forEach((k) => {
+    const v = r.headers.get(k);
+    if (v) h.set(k, v);
+  });
+  if (!h.get('content-type')) h.set('content-type', 'audio/mpeg');
+  h.set('accept-ranges', 'bytes');           /* tell the player it may seek */
+  return new Response(r.body, { status: r.status, statusText: r.statusText, headers: h });
+}
 
 /* ---- background update check (Chrome wakes installed PWAs on a schedule) ---- */
 const GH_API = 'https://api.github.com/repos/EC-Aroma/pulse/commits?per_page=1&sha=main';
@@ -94,6 +129,13 @@ async function handleShare(request) {
 
 self.addEventListener('fetch', (e) => {
   const req = e.request;
+  {
+    const u = new URL(req.url);
+    if (u.origin === location.origin && u.pathname.includes('/drive-stream/')) {
+      e.respondWith(driveStream(req, u));
+      return;
+    }
+  }
   if (req.method === 'POST' && new URL(req.url).pathname.endsWith('/share-target')) {
     e.respondWith(handleShare(req));
     return;
