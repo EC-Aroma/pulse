@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-StjN0QkGvFnFhJOhsJ52UStoY1qvV6CeiqzgtazGc5s=' 'sha256-rEpaKWoGk5DBaorVIL5+ZHismIt53Lw/yfeU5C7Mu5c=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-EBDuknhMVlHsX61uCqwigvGdHZ+BbHgLAQC/+JHsmqs=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-7Mbb/+jOmX3QN/AwHQcEZBbUVo2TSCNbpMkKLCeChbk=' 'sha256-e+uOyCwVVU+u0gI+OvQShZbkUPGElw9tJJj9FLuw4+0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-/4BgvxeZq4g9Rz5qTQmIOr3WngV2rdMuyYIhySXvdnc=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1021,7 +1021,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.7.0';
+const APP_VERSION = '10.8.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -3308,6 +3308,26 @@ const FLUID = (() => {
         outColor = clamp(corrected, lo, hi);
       }`,
 
+    /* Many splats in one pass.
+       A splat is a full-screen draw, so doing one per equaliser bar would mean
+       fifty passes a frame. This takes all the bars at once and costs two. */
+    splatMulti: F_HEAD + `
+      uniform sampler2D uTarget;
+      uniform float aspectRatio, radius;
+      uniform int count;
+      uniform vec2 points[40];
+      uniform vec3 values[40];
+      void main() {
+        vec3 acc = vec3(0.0);
+        for (int i = 0; i < 40; i++) {
+          if (i >= count) break;
+          vec2 p = vUv - points[i];
+          p.x *= aspectRatio;
+          acc += exp(-dot(p, p) / radius) * values[i];
+        }
+        outColor = vec4(texture(uTarget, vUv).xyz + acc, 1.0);
+      }`,
+
     clear: F_HEAD + `
       uniform sampler2D uTexture;
       uniform float value;
@@ -3475,6 +3495,42 @@ const FLUID = (() => {
     blit(dye.write); dye.swap();
   }
 
+  /* The bars stirring the fluid.
+     Requests are queued rather than drawn immediately: the GL state the splat
+     needs (bound quad, blending off) is only set up inside frame(), so a call
+     from the middle of a 2D canvas paint would draw into nothing. */
+  const MAXSTIR = 40;
+  const stirPts = new Float32Array(MAXSTIR * 2);
+  const stirVel = new Float32Array(MAXSTIR * 3);
+  const stirCol = new Float32Array(MAXSTIR * 3);
+  let stirN = 0, stirRadius = 1;
+  function stir(x, y, dx, dy, colour, radiusMul) {
+    if (!ok || stirN >= MAXSTIR) return;
+    const i = stirN++;
+    stirPts[i * 2] = x; stirPts[i * 2 + 1] = y;
+    stirVel[i * 3] = dx; stirVel[i * 3 + 1] = dy; stirVel[i * 3 + 2] = 0;
+    const c = colour || [0, 0, 0];
+    stirCol[i * 3] = c[0]; stirCol[i * 3 + 1] = c[1]; stirCol[i * 3 + 2] = c[2];
+    stirRadius = radiusMul === undefined ? 1 : radiusMul;
+  }
+  function applyStirs() {
+    if (!stirN || !progs.splatMulti) { stirN = 0; return; }
+    const P = progs.splatMulti;
+    const draw = (target, arr) => {
+      use(P, target);
+      gl.uniform1i(P.u.uTarget, target.read.attach(0));
+      gl.uniform1f(P.u.aspectRatio, canvas.width / canvas.height);
+      gl.uniform1f(P.u.radius, CFG.radius * stirRadius);
+      gl.uniform1i(P.u.count, stirN);
+      gl.uniform2fv(P.u['points[0]'], stirPts);
+      gl.uniform3fv(P.u['values[0]'], arr);
+      blit(target.write); target.swap();
+    };
+    draw(velocity, stirVel);
+    draw(dye, stirCol);
+    stirN = 0;
+  }
+
   function rnd() {
     seed = (seed * 1664525 + 1013904223) % 4294967296;
     return seed / 4294967296;
@@ -3526,6 +3582,8 @@ const FLUID = (() => {
         }
       }
     }
+
+    applyStirs();                 /* whatever the bars asked for since last frame */
 
     /* --- solve --- */
     use(progs.curl, velocity);
@@ -3628,7 +3686,7 @@ const FLUID = (() => {
     }
   }
 
-  return { supported, init, resize, frame, reset, setQuality, QUALITY, CFG, get ready() { return ok; }, get failed() { return failed; } };
+  return { supported, init, resize, frame, reset, stir, setQuality, QUALITY, CFG, get ready() { return ok; }, get failed() { return failed; } };
 })();
 window.FLUID = FLUID;
 
@@ -4260,6 +4318,7 @@ const FX = (() => {
     smokeDetail: 'fine',    // soft | fine | ultra — resolution and particle count
     smokeSpeed: 50,         // 0-100, how fast everything moves
     smokeBright: 50,        // 0-100, how strongly the smoke is lit
+    barsStir: 'both',       // off | push | light | both — how the bars work the GPU smoke
     smokeCount: 2,          // how many smoke fronts, 2 to 4
     smokeC: '#25e5a7', smokeD: '#c85cff',   // the third and fourth fronts
     warpOnBeat: true,       // space: hit light speed on the drops
@@ -4296,8 +4355,42 @@ const FX = (() => {
     vice:      ['#ff4fa3', '#ff77c8', '#ffb457', '#2de1c2', '#7b5cff'],
     ice:       ['#8fe9ff', '#4fc3f7', '#2b8cff', '#a5b4ff', '#e6f6ff']
   };
+  /* The opposite side of the colour wheel from the smoke, lifted to near-full
+     brightness: whatever colours the smoke is set to, the bars stay legible
+     against it instead of melting into it. */
+  function contrastStops() {
+    const st = style();
+    const cols = [st.smokeA || '#ff6a1a', st.smokeB || '#1f8cff'];
+    if ((+st.smokeCount || 2) >= 3) cols.push(st.smokeC || '#25e5a7');
+    if ((+st.smokeCount || 2) >= 4) cols.push(st.smokeD || '#c85cff');
+    /* Averaging the colours would be wrong — orange and blue average to grey,
+       whose opposite is grey. Work in hues instead and take the widest empty
+       arc of the colour wheel: the one hue no smoke front is using. */
+    const hues = cols.map((hx) => {
+      const [r, g, b] = hexToRgbArr(hx, 1);
+      const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+      if (!d) return 0;
+      let hh = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+      hh *= 60; return (hh + 360) % 360;
+    }).sort((a, b) => a - b);
+    let best = 0, bestGap = -1;
+    for (let i = 0; i < hues.length; i++) {
+      const a = hues[i], b = hues[(i + 1) % hues.length];
+      const gap = (b - a + 360) % 360 || 360;
+      if (gap > bestGap) { bestGap = gap; best = (a + gap / 2) % 360; }
+    }
+    const hsl = (hh, s, l) => {
+      const k = (n) => (n + hh / 30) % 12;
+      const a = s * Math.min(l, 1 - l);
+      const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+      return [f(0), f(8), f(4)];
+    };
+    const hex = (a) => '#' + a.map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, '0')).join('');
+    return [hex(hsl(best, 1, 0.42)), hex(hsl(best, 1, 0.62)), hex(hsl((best + 18) % 360, 0.85, 0.86))];
+  }
   function paletteStops() {
     const st = style();
+    if (st.palette === 'contrast') return contrastStops();
     if (st.palette === 'accent') {
       const cs = getComputedStyle(document.documentElement);
       return [(cs.getPropertyValue('--a1') || '#ff3e58').trim(), (cs.getPropertyValue('--a2') || '#ff8c3c').trim()];
@@ -5050,6 +5143,48 @@ const FX = (() => {
     V.dt = dt || 0.016;
     return V.dt;
   }
+  /* ---------- the bars stirring the smoke ----------
+     Every bar is a little jet at its own tip: the taller it stands the harder
+     it blows, and the moment it jumps it punches. The smoke above the bars is
+     therefore shaped live by the music rather than merely sitting behind it. */
+  const STIR = { prev: new Float32Array(128), tick: 0 };
+  function stirFluid(bands, w, h, x0, top, bandH, bandW) {
+    const st = style();
+    const mode = st.barsStir || 'both';
+    if (mode === 'off' || !window.FLUID || !FLUID.ready || !FLUID.stir) return;
+    const n = bands.length;
+    const push = mode === 'light' ? 0 : 1;
+    const lightGain = mode === 'push' ? 0 : 0.14 * brightFactor();
+    const spd = speedFactor();
+    /* Each jet costs the GPU real work, so take the twelve bars with most to
+       say this frame — the ones that are loud or have just jumped — and stir
+       on every second frame. Twice the force, half as often: the smoke cannot
+       tell the difference, and the phone can. */
+    STIR.tick++;
+    if (STIR.tick % 2) { for (let i = 0; i < n; i++) STIR.prev[i] = bands[i] || 0; return; }
+    const picks = [];
+    for (let i = 0; i < n; i++) {
+      const v = bands[i] || 0;
+      const attack = Math.max(0, v - STIR.prev[i]);
+      STIR.prev[i] = v;
+      if (v < 0.05 && attack < 0.02) continue;
+      picks.push([v + attack * 3, i, v, attack]);
+    }
+    picks.sort((a, b) => b[0] - a[0]);
+    const take = Math.min(12, picks.length);
+    for (let k = 0; k < take; k++) {
+      const [, i, v, attack] = picks[k];
+      const bh = v * bandH * 0.95;
+      const cx = (x0 + (i + 0.5) * bandW / n) / w;
+      /* the fluid counts y from the bottom of the screen */
+      const cy = 1 - (top + bandH - bh) / h;
+      const force = (v * 440 + attack * 3000) * spd * push;
+      const col = lightGain ? hexToRgbArr(colourAt(i / n), lightGain * (0.3 + v)) : [0, 0, 0];
+      /* a touch of sideways wander so the jets do not stack into a wall */
+      FLUID.stir(cx, cy, (i % 2 ? 1 : -1) * force * 0.12, force, col, 0.34);
+    }
+  }
+
   function paint(c, bands, low) {
     if (!fitCanvas(c)) return;
     const ctx = c.getContext('2d');
@@ -5065,7 +5200,7 @@ const FX = (() => {
     const big = c.id === 'vizBig' || c.id === 'vizPreview';
     const place = st.barPlace || (st.centreBand === false ? 'full' : 'middle');
     const scenic = big && place !== 'full';
-    let band = 0, inset = 0;
+    let band = 0, inset = 0, barTop = 0;
     if (scenic) {
       /* bottom = a low strip so the scene owns the screen; middle = the old
          centred band, at twice the height */
@@ -5076,6 +5211,7 @@ const FX = (() => {
       /* flush with the very bottom of the screen — the bars should look like
          they grow out of the phone's own navigation bar */
       const top = place === 'bottom' ? h - band : Math.round((h - band) / 2);
+      barTop = top;
       ctx.save();
       ctx.translate(inset, top);
     }
@@ -5091,6 +5227,10 @@ const FX = (() => {
     else drawBars(ctx, dw, dh, bands, false);
     if (sideways) ctx.restore();
     if (scenic) ctx.restore();
+    /* only the full-screen view has a GPU fluid behind it to stir */
+    if (c.id === 'vizBig' && st.bg === 'fluid' && FL.on && !sideways) {
+      stirFluid(bands, w, h, inset, barTop, bh, bw2);
+    }
     if (shape !== 'arc' && V.beat > 0.05) {
       ctx.fillStyle = `rgba(255,255,255,${(V.beat * 0.08).toFixed(3)})`;
       ctx.fillRect(0, 0, w, h);
@@ -5590,7 +5730,7 @@ const FX = (() => {
         </select></label>
       <label class="slider-row">Colours
         <select id="stPalette">
-          ${[['accent', 'My accent colours'], ['rainbow', 'Rainbow'], ['cyberpunk', 'Cyberpunk'], ['vice', 'Vice City'], ['ice', 'Ice'], ['custom', 'Custom (pick below)']]
+          ${[['accent', 'My accent colours'], ['contrast', 'Opposite of the smoke (stands out)'], ['rainbow', 'Rainbow'], ['cyberpunk', 'Cyberpunk'], ['vice', 'Vice City'], ['ice', 'Ice'], ['custom', 'Custom (pick below)']]
             .map(([v, l]) => `<option value="${v}" ${st.palette === v ? 'selected' : ''}>${l}</option>`).join('')}
         </select></label>
       <div class="colour-row" id="stCustom" style="${st.palette === 'custom' ? '' : 'display:none'}">
@@ -5629,6 +5769,11 @@ const FX = (() => {
         </select></label>
       ${slider('stSpeed', 'Movement speed', 0, 100, 1, st.smokeSpeed === undefined ? 50 : st.smokeSpeed, '')}
       ${slider('stBright', 'Brightness', 0, 100, 1, st.smokeBright === undefined ? 50 : st.smokeBright, '')}
+      <label class="slider-row" id="stStirRow" style="${st.bg === 'fluid' ? '' : 'display:none'}">Bars and smoke
+        <select id="stStir">
+          ${[['both', 'the bars stir it and light it'], ['push', 'the bars stir it'], ['light', 'the bars light it'], ['off', 'no interaction']]
+            .map(([v, l]) => `<option value="${v}" ${(st.barsStir || 'both') === v ? 'selected' : ''}>${l}</option>`).join('')}
+        </select></label>
       <label class="slider-row" id="stDetailRow" style="${(st.bg === 'realsmoke' || st.bg === 'fluid') ? '' : 'display:none'}">Smoke detail
         <select id="stDetail">
           ${[['soft', 'soft — easiest on the battery'], ['fine', 'fine — sharp wisps'], ['ultra', 'ultra — very fine'], ['extreme', 'extreme — full resolution, for a fast phone']]
@@ -5771,7 +5916,10 @@ const FX = (() => {
       if (cr) cr.style.display = (style().bg === 'realsmoke' || style().bg === 'fluid') ? '' : 'none';
       const wr = $('stWarpRow');
       if (wr) wr.style.display = style().bg === 'space' ? '' : 'none';
+      const sr = $('stStirRow');
+      if (sr) sr.style.display = style().bg === 'fluid' ? '' : 'none';
     });
+    stBind('stStir', 'barsStir');
     stBind('stDetail', 'smokeDetail', () => { RS.parts.length = 0; });
     ['stSmokeA', 'stSmokeB', 'stSmokeC', 'stSmokeD'].forEach((id, i) => {
       const n = $(id); if (!n) return;
@@ -6007,7 +6155,7 @@ const FX = (() => {
   return {
     init, build, apply, mix, onTrackLoad, onPlayState, setTrackGain,
     analyseTrack, analyseLibrary, artworkSheet, batchArtwork, searchOnline, applyCandidate,
-    say, cue, connectHR, hrSummary, toggleCadence, cadenceQueue, renderMixer, registerCanvas, style, applyTextStyle, STYLE_PRESETS, selfTest, reconnect, vizBlocker, splitMixer,
+    say, cue, connectHR, hrSummary, toggleCadence, cadenceQueue, renderMixer, registerCanvas, style, applyTextStyle, paletteStops, colourAt, STYLE_PRESETS, selfTest, reconnect, vizBlocker, splitMixer,
     get hr() { return HR; }, get cad() { return CAD; },
     stopAnalysis() { analysisAbort = true; },
     PRESETS, BANDS
