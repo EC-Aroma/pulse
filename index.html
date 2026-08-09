@@ -697,6 +697,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
             <button class="ghost" id="btnDiagnose">Diagnose a video file</button>
             <button class="primary" id="btnArchive">Find free sets &amp; concerts</button>
             <button class="primary" id="btnCloud">Cloud library (my GitHub folder)</button>
+            <button class="primary" id="btnDrive">Google Drive folder</button>
           </div>
           <p class="hint" id="videoHint">Pick a video file (mp4, mov, webm&hellip;) and Pulse keeps just the soundtrack, re-compressed small. Nothing is uploaded &mdash; the conversion happens on your phone.<br><br>
           <b>From TikTok, X or Instagram:</b> use that app's own <b>Save video</b> button to put the file on your phone, then share it into Pulse from the Android share sheet — Pulse keeps the soundtrack and drops the picture. Paste one of their links here and Pulse tells you exactly which button to press.<br><br>
@@ -1011,7 +1012,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.0.0';
+const APP_VERSION = '10.1.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -2718,6 +2719,7 @@ function wire() {
   $('btnPersist').onclick = () => requestPersist(false);
   $('btnBulkRename').onclick = () => RENAME.openBulk();
   $('btnMeasure').onclick = () => MEASURE.open();
+  $('btnDrive').onclick = () => DRIVE.open();
   $('btnSpeedTest').onclick = () => FX.selfTest();
   $('btnLastTest').onclick = () => {
     const t = S.settings.lastSelfTest;
@@ -8357,6 +8359,179 @@ else { FIND.init(); SETTABS.init(); }
    straight from the app. Same origin as the app, so no
    permission games: files just load.
    ============================================================ */
+/* ============================================================
+   DRIVE — a music folder in your own Google Drive, read from
+   the app.
+
+   Files are listed straight from Drive and downloaded into the
+   library, where they behave like any other track: tagged,
+   analysed, playable in airplane mode. Drive is the shelf; the
+   phone is what you actually play from.
+
+   Auth is a browser token flow — no secret, nothing stored on a
+   server, and the token lives in memory only, so closing the app
+   signs you out.
+   ============================================================ */
+const DRIVE = (() => {
+  const GIS = 'https://accounts.google.com/gsi/client';
+  const API = 'https://www.googleapis.com/drive/v3';
+  const SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
+  const AUD = /\.(mp3|m4a|m4b|aac|flac|ogg|oga|opus|wav|wma)$/i;
+  let token = null, tokenAt = 0, client = null, gisLoaded = false;
+
+  const clientId = () => (S.settings.driveClientId || '').trim();
+  const folderName = () => (S.settings.driveFolder || 'Pulse music').trim();
+
+  function loadGis() {
+    if (gisLoaded) return Promise.resolve(true);
+    return new Promise((resolve, reject) => {
+      const s2 = document.createElement('script');
+      s2.src = GIS; s2.async = true; s2.defer = true;
+      s2.onload = () => { gisLoaded = true; resolve(true); };
+      s2.onerror = () => reject(new Error('Could not load Google sign-in — are you online?'));
+      document.head.appendChild(s2);
+    });
+  }
+
+  /* a token lasts an hour; ask for a fresh one when it is close to expiry */
+  async function auth(interactive) {
+    if (!clientId()) throw new Error('no-client-id');
+    if (token && Date.now() - tokenAt < 50 * 60 * 1000) return token;
+    await loadGis();
+    return new Promise((resolve, reject) => {
+      try {
+        client = google.accounts.oauth2.initTokenClient({
+          client_id: clientId(),
+          scope: SCOPE,
+          callback: (res) => {
+            if (res && res.access_token) { token = res.access_token; tokenAt = Date.now(); resolve(token); }
+            else reject(new Error('Sign-in was cancelled'));
+          },
+          error_callback: (e) => reject(new Error((e && e.type) || 'Sign-in failed'))
+        });
+        client.requestAccessToken({ prompt: interactive ? 'consent' : '' });
+      } catch (e) { reject(e); }
+    });
+  }
+
+  async function api(path) {
+    const t = await auth(false);
+    const r = await fetch(API + path, { headers: { Authorization: 'Bearer ' + t } });
+    if (r.status === 401) { token = null; throw new Error('Session expired — connect again'); }
+    if (!r.ok) throw new Error('Drive said ' + r.status);
+    return r.json();
+  }
+
+  async function findFolder() {
+    const q = `mimeType='application/vnd.google-apps.folder' and name='${folderName().replace(/'/g, "\\'")}' and trashed=false`;
+    const d = await api(`/files?q=${encodeURIComponent(q)}&fields=files(id,name)&pageSize=5`);
+    return (d.files || [])[0] || null;
+  }
+
+  async function listTracks() {
+    const folder = await findFolder();
+    if (!folder) throw new Error(`No folder called “${folderName()}” in your Drive. Make one and put music in it.`);
+    const out = [];
+    let pageToken = '';
+    do {
+      const q = `'${folder.id}' in parents and trashed=false`;
+      const d = await api(`/files?q=${encodeURIComponent(q)}&fields=nextPageToken,files(id,name,size,mimeType)` +
+        `&pageSize=200&orderBy=name${pageToken ? '&pageToken=' + pageToken : ''}`);
+      (d.files || []).forEach((f) => {
+        if (AUD.test(f.name) || (f.mimeType || '').startsWith('audio/')) out.push(f);
+      });
+      pageToken = d.nextPageToken || '';
+    } while (pageToken);
+    return out;
+  }
+
+  async function download(f) {
+    const t = await auth(false);
+    const r = await fetch(`${API}/files/${f.id}?alt=media`, { headers: { Authorization: 'Bearer ' + t } });
+    if (!r.ok) throw new Error('Download failed (' + r.status + ')');
+    const blob = await r.blob();
+    return new File([blob], f.name, { type: f.mimeType || 'audio/mpeg' });
+  }
+
+  /* ---------- screen ---------- */
+  async function open() {
+    $('pkTitle').textContent = 'Google Drive';
+    $('pkList').dataset.ctx = '{}';
+    $('pkList').innerHTML = `<div class="pad">
+        <label class="fld">Folder in your Drive
+          <input id="drvFolder" value="${esc(folderName())}"></label>
+        <label class="fld">OAuth client ID
+          <input id="drvId" placeholder="1234-abcd.apps.googleusercontent.com" value="${esc(clientId())}"></label>
+        <p class="hint" style="padding:0">One-off setup. Without it Google has no way to know which app is asking.
+          Tap <b>How do I get one?</b> and I walk you through it.</p>
+        <div class="row-btns" style="padding:0">
+          <button class="primary" id="drvGo">Connect &amp; list music</button>
+          <button class="ghost" id="drvHelp">How do I get one?</button>
+        </div>
+      </div><div id="drvList"></div>`;
+    openSheet('pickSheet');
+
+    const save2 = () => {
+      S.settings.driveClientId = $('drvId').value.trim();
+      S.settings.driveFolder = $('drvFolder').value.trim() || 'Pulse music';
+      saveSettings();
+    };
+    $('drvHelp').onclick = () => helpSheet();
+    $('drvGo').onclick = async () => {
+      save2();
+      if (!clientId()) { toast('Paste the client ID first'); return; }
+      $('drvList').innerHTML = '<div class="empty">Asking Google…</div>';
+      try {
+        await auth(true);
+        const files = await listTracks();
+        if (!files.length) { $('drvList').innerHTML = `<div class="empty"><b>Folder is empty</b>Nothing playable in “${esc(folderName())}”.</div>`; return; }
+        const total = files.reduce((a, f) => a + (+f.size || 0), 0);
+        $('drvList').innerHTML = `<div class="pad"><div class="card muted">${files.length} track${files.length > 1 ? 's' : ''} · ${(total / 1e9).toFixed(2)} GB in the folder</div>
+            <div class="row-btns" style="padding:0"><button class="primary" id="drvAll">Download all into my library</button></div></div>` +
+          files.map((f, i) => `<div class="row" data-drv="${i}">
+            <div class="art sm"></div>
+            <div class="r-meta"><div class="r-title">${esc(f.name)}</div>
+              <div class="r-sub">${f.size ? ((+f.size) / 1e6).toFixed(1) + ' MB' : ''}</div></div>
+            <div class="r-right">↓</div></div>`).join('');
+        const grab = async (list) => {
+          let n = 0;
+          for (const f of list) {
+            toast(`Downloading ${++n} of ${list.length}…`);
+            try { await importFiles([await download(f)]); }
+            catch (e) { toast('Failed on ' + f.name); }
+          }
+          toast(`Done — ${n} added`);
+          render();
+        };
+        els('#drvList [data-drv]').forEach((n) => n.onclick = () => grab([files[+n.dataset.drv]]));
+        $('drvAll').onclick = () => grab(files);
+      } catch (e) {
+        const msg = (e && e.message) || String(e);
+        $('drvList').innerHTML = `<div class="empty"><b>Could not read Drive</b>${esc(msg)}</div>`;
+      }
+    };
+  }
+
+  function helpSheet() {
+    alert(
+      'Getting a client ID — about ten minutes, free, once only.\n\n' +
+      '1. console.cloud.google.com → create a project (any name)\n' +
+      '2. APIs & Services → Library → search "Google Drive API" → Enable\n' +
+      '3. APIs & Services → OAuth consent screen → choose Internal\n' +
+      '   (Internal means only your own ec-aroma.com accounts can use it,\n' +
+      '    and Google does not need to review the app)\n' +
+      '4. Credentials → Create credentials → OAuth client ID → Web application\n' +
+      '5. Under "Authorised JavaScript origins" add exactly:\n' +
+      '   https://ec-aroma.github.io\n' +
+      '6. Create → copy the client ID → paste it here\n\n' +
+      'Then make a folder called "Pulse music" in your Drive and drop tracks in it.'
+    );
+  }
+
+  return { open, listTracks, download };
+})();
+window.DRIVE = DRIVE;
+
 const CLOUD = (() => {
   const FOLDER = 'music';
   const AUD = /\.(mp3|m4a|m4b|aac|flac|ogg|oga|opus|wav|wma)$/i;
