@@ -1,7 +1,7 @@
 /* Pulse service worker — offline app shell.
    Your music itself lives in IndexedDB, not here, so the app works
    with zero network once installed. */
-const VERSION = 'pulse-v10.3.1';
+const VERSION = 'pulse-v10.4.0';
 const SHELL = [
   './',
   './index.html',
@@ -31,9 +31,24 @@ self.addEventListener('activate', (e) => {
    than downloaded. Kept in memory here, exactly as it is in the page — it is
    never written to a cache or IndexedDB, and it dies with the worker. */
 let driveToken = null;
+let driveTokenAt = 0;
+let driveNote = 'nothing tried yet';        /* plain-English trace for the cloud check */
 self.addEventListener('message', (e) => {
   if (e.data === 'skipWaiting') { self.skipWaiting(); return; }
-  if (e.data && e.data.type === 'drive-token') driveToken = e.data.token || null;
+  if (e.data && e.data.type === 'drive-token') {
+    driveToken = e.data.token || null;
+    driveTokenAt = driveToken ? Date.now() : 0;
+    driveNote = driveToken ? 'the app handed me a key' : 'the app said it has no key';
+  }
+  /* the cloud check asking the worker to describe itself */
+  if (e.data && e.data.type === 'ping' && e.ports && e.ports[0]) {
+    e.ports[0].postMessage({
+      version: VERSION,
+      hasToken: !!driveToken,
+      tokenAgeSec: driveToken ? Math.round((Date.now() - driveTokenAt) / 1000) : null,
+      note: driveNote
+    });
+  }
 });
 
 /* Play straight from Drive with no copy on the phone.
@@ -57,9 +72,15 @@ async function askClientsForToken() {
 
 async function driveStream(req, url) {
   const id = decodeURIComponent(url.pathname.split('/drive-stream/')[1] || '');
-  if (!id) return new Response('No file', { status: 400 });
-  if (!driveToken) await askClientsForToken();
-  if (!driveToken) return new Response('Not connected to Drive', { status: 401 });
+  if (!id) return new Response('No file id in the address', { status: 400 });
+  if (!driveToken) {
+    driveNote = 'no key in memory — asked the app for one';
+    await askClientsForToken();
+  }
+  if (!driveToken) {
+    driveNote = 'the app never answered with a key (is it signed in to Drive?)';
+    return new Response('Not connected to Drive: ' + driveNote, { status: 401 });
+  }
   const range = req.headers.get('range');
   const call = () => {
     const headers = { Authorization: 'Bearer ' + driveToken };
@@ -72,12 +93,23 @@ async function driveStream(req, url) {
     r = await call();
     /* an hour-old token: bin it, ask for a new one, try once more */
     if (r.status === 401 || r.status === 403) {
+      let body = '';
+      try { body = (await r.clone().text()).slice(0, 300); } catch (e) {}
+      driveNote = 'Google refused the key (' + r.status + ') ' + body;
       driveToken = null;
       await askClientsForToken();
       if (driveToken) r = await call();
     }
+    if (!r.ok && r.status !== 206) {
+      let body = '';
+      try { body = (await r.clone().text()).slice(0, 400); } catch (e) {}
+      driveNote = 'Google said ' + r.status + ' ' + body;
+      return new Response(driveNote, { status: r.status });
+    }
+    driveNote = 'last request worked (' + r.status + ')';
   } catch (e) {
-    return new Response('Drive unreachable', { status: 504 });
+    driveNote = 'could not reach Google at all: ' + ((e && e.message) || e);
+    return new Response(driveNote, { status: 504 });
   }
   const h = new Headers();
   ['content-type', 'content-length', 'content-range'].forEach((k) => {

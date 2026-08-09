@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-uLfwurFWfLcbrI0A42kFsXtbIh1Q27Tn8VvbROFigt0=' 'sha256-9F+r3X4IpAWEDUYkQ+nioykln6v27EPnJNoVgLxDUFE=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-EzdDF2mE3OYFJwfUzMDeRt7xVSHRtWK6rl4dQYUVfao=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-9L3ctUKIuymR60aHgNGQOukzgSSdbb5grBV8po5mEc0=' 'sha256-9F+r3X4IpAWEDUYkQ+nioykln6v27EPnJNoVgLxDUFE=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-MPKCxX40KAve8DjfiTvfIiTykyWXEUcx3RnvwMvIRPo=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -102,6 +102,13 @@ select,input[type=number],input[type=text],input:not([type]),input[type=search]{
 .r-meta{flex:1;min-width:0}
 .r-title{font-size:15.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .r-sub{font-size:13px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+/* A title too long for the row slides left to show its tail, then slides back.
+   It only runs on rows that actually overflow — the rest never move. */
+.r-title.mq,.r-sub.mq{text-overflow:clip;-webkit-mask-image:linear-gradient(90deg,#000 0,#000 92%,transparent 100%);mask-image:linear-gradient(90deg,#000 0,#000 92%,transparent 100%)}
+.r-title.mq>.mqi,.r-sub.mq>.mqi{display:inline-block;white-space:nowrap;will-change:transform;
+  animation:mqslide var(--mqd,10s) linear infinite alternate}
+@keyframes mqslide{0%,14%{transform:translateX(0)}86%,100%{transform:translateX(var(--mqx,0px))}}
+@media (prefers-reduced-motion:reduce){.r-title.mq>.mqi,.r-sub.mq>.mqi{animation:none}}
 .r-right{display:flex;align-items:center;gap:8px;color:var(--mut);font-size:12.5px;font-variant-numeric:tabular-nums}
 .r-more{width:36px;height:44px;display:grid;place-items:center;color:var(--mut);margin-right:-8px}
 .r-fav{color:var(--a1)}
@@ -699,6 +706,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
             <button class="primary" id="btnArchive">Find free sets &amp; concerts</button>
             <button class="primary" id="btnCloud">Cloud library (my GitHub folder)</button>
             <button class="primary" id="btnDrive">Google Drive folder</button>
+            <button class="ghost" id="btnCloudCheck">Cloud check &mdash; why won't it play?</button>
           </div>
           <p class="hint" id="videoHint">Pick a video file (mp4, mov, webm&hellip;) and Pulse keeps just the soundtrack, re-compressed small. Nothing is uploaded &mdash; the conversion happens on your phone.<br><br>
           <b>From TikTok, X or Instagram:</b> use that app's own <b>Save video</b> button to put the file on your phone, then share it into Pulse from the Android share sheet — Pulse keeps the soundtrack and drops the picture. Paste one of their links here and Pulse tells you exactly which button to press.<br><br>
@@ -1013,7 +1021,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.3.1';
+const APP_VERSION = '10.4.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -1680,7 +1688,11 @@ async function startCrossfade(remaining) {
     const t = T.get(P.queue[P.qi]);
     /* a cross-origin stream that refuses CORS: retry on the plain element */
     if (t && t.driveId && !t.hasBlob) {
-      toast('Drive would not send that track — open Settings, App, Google Drive folder and connect again');
+      /* ask what actually went wrong rather than guessing at it */
+      toast('Cloud track would not start — checking why…');
+      let why = '';
+      try { why = window.DRIVE && DRIVE.explain ? await DRIVE.explain(t) : ''; } catch (err) {}
+      toast(why || 'Drive would not send that track — Settings, App, Cloud check');
       return;
     }
     if (t && t.streamUrl && !t.hasBlob && t.corsOk !== false && k !== 's') {
@@ -1896,7 +1908,38 @@ function render() {
   else if (S.view === 'settings') renderSettings();
   else if (S.view === 'gym') renderGymExtras();
   paintNow();
+  try { MQ.scan(document); } catch (e) {}
 }
+
+/* ---- long titles scroll ----
+   A title wider than its row slides left to reveal the end, waits, and slides
+   back. Only rows on screen are set up, and only if the text really overflows,
+   so a library of a thousand tracks costs nothing. */
+const MQ = (() => {
+  let io = null;
+  function setup(el) {
+    if (el.dataset.mq) return;
+    const over = el.scrollWidth - el.clientWidth;
+    if (over < 6) { el.dataset.mq = 'no'; return; }   /* fits — leave it alone */
+    el.dataset.mq = 'yes';
+    const span = document.createElement('span');
+    span.className = 'mqi';
+    while (el.firstChild) span.appendChild(el.firstChild);
+    el.appendChild(span);
+    const travel = over + 6;
+    el.style.setProperty('--mqx', (-travel) + 'px');
+    /* roughly 60 pixels a second, plus a pause at each end to read it */
+    el.style.setProperty('--mqd', Math.max(5, travel / 60 + 4).toFixed(1) + 's');
+    el.classList.add('mq');
+    if (io) io.unobserve(el);
+  }
+  function scan(root = document) {
+    if (io) io.disconnect();
+    io = new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) setup(e.target); }), { rootMargin: '120px' });
+    els('.r-title', root).forEach((n) => io.observe(n));
+  }
+  return { scan };
+})();
 
 function rowHTML(t, opts = {}) {
   const bits = [];
@@ -2344,6 +2387,7 @@ function renderQueue() {
   }).join('');
   $('queueList').innerHTML = rows || '<div class="empty">Queue is empty.</div>';
   hydrateArt($('queueList'));
+  try { MQ.scan(document); } catch (e) {}
 }
 
 /* ============================================================
@@ -2732,6 +2776,7 @@ function wire() {
   $('btnBulkRename').onclick = () => RENAME.openBulk();
   $('btnMeasure').onclick = () => MEASURE.open();
   $('btnDrive').onclick = () => DRIVE.open();
+  $('btnCloudCheck').onclick = () => DRIVE.check();
   $('btnSpeedTest').onclick = () => FX.selfTest();
   $('btnLastTest').onclick = () => {
     const t = S.settings.lastSelfTest;
@@ -8455,7 +8500,86 @@ const DRIVE = (() => {
         shareToken();
       } catch (err) { /* not signed in — the player will report it */ }
     });
+    /* Without this the browser holds every message from the worker in a queue
+       and never delivers it to an addEventListener listener. The worker was
+       asking for a key and the app genuinely never heard the question. */
+    if (navigator.serviceWorker.startMessages) navigator.serviceWorker.startMessages();
+    /* a new worker takes over after an update — hand it the key straight away */
+    navigator.serviceWorker.addEventListener('controllerchange', () => shareToken());
+    navigator.serviceWorker.ready.then(() => shareToken());
   } catch (e) {}
+
+  /* ---------- cloud check ----------
+     Everything that has to line up for a cloud track to play, tested for real
+     and written out in plain words. */
+  async function askWorker() {
+    return new Promise((resolve) => {
+      try {
+        const c = navigator.serviceWorker && navigator.serviceWorker.controller;
+        if (!c) return resolve(null);
+        const ch = new MessageChannel();
+        const done = setTimeout(() => resolve(null), 2500);
+        ch.port1.onmessage = (e) => { clearTimeout(done); resolve(e.data); };
+        c.postMessage({ type: 'ping' }, [ch.port2]);
+      } catch (e) { resolve(null); }
+    });
+  }
+
+  /* fetch the first two bytes of a cloud track the same way the player would,
+     and read what actually comes back */
+  async function probe(track) {
+    if (!track || !track.streamUrl) return 'no cloud track to test';
+    try {
+      const r = await fetch(track.streamUrl, { headers: { Range: 'bytes=0-1' }, cache: 'no-store' });
+      if (r.status === 200 || r.status === 206) {
+        const b = await r.arrayBuffer();
+        return `worked — ${r.status}, ${b.byteLength} bytes, type ${r.headers.get('content-type') || 'unknown'}`;
+      }
+      const txt = (await r.text()).slice(0, 300);
+      return `failed — ${r.status} ${txt}`;
+    } catch (e) { return 'failed — ' + ((e && e.message) || e); }
+  }
+
+  async function explain(track) {
+    const w = await askWorker();
+    if (!w) return 'The app’s background worker is not running yet. Close Pulse fully and open it again.';
+    const p = await probe(track);
+    if (p.startsWith('worked')) return 'Drive is answering fine now — try playing it again.';
+    return p.replace(/^failed — /, '');
+  }
+
+  async function check() {
+    const t = T.list().find((x) => x.driveId && !x.hasBlob);
+    const w = await askWorker();
+    const p = await probe(t);
+    const L = [];
+    L.push('PULSE — CLOUD CHECK');
+    L.push(new Date().toLocaleString());
+    L.push('');
+    L.push('app version:        ' + APP_VERSION);
+    L.push('background worker:  ' + (w ? w.version : 'NOT RUNNING — close the app fully and reopen it'));
+    L.push('worker has a key:   ' + (w ? (w.hasToken ? 'yes, ' + w.tokenAgeSec + 's old' : 'no') : '—'));
+    L.push('worker says:        ' + (w ? w.note : '—'));
+    L.push('app has a key:      ' + (token ? 'yes, ' + Math.round((Date.now() - tokenAt) / 1000) + 's old' : 'no — connect in Google Drive folder'));
+    L.push('client ID set:      ' + (clientId() ? 'yes' : 'NO — paste it in Google Drive folder'));
+    L.push('folder name:        ' + folderName());
+    L.push('cloud tracks:       ' + T.list().filter((x) => x.driveId && !x.hasBlob).length);
+    L.push('online:             ' + (navigator.onLine ? 'yes' : 'no'));
+    L.push('');
+    L.push('test track:         ' + (t ? t.title : 'none in the library'));
+    L.push('fetching 2 bytes:   ' + p);
+    L.push('');
+    if (!w) L.push('→ The worker is what talks to Drive. It is not there. Swipe Pulse away from recents, open it again, then run this check.');
+    else if (!clientId()) L.push('→ No client ID, so Google has no idea who is asking. Settings, App, Google Drive folder.');
+    else if (p.startsWith('worked')) L.push('→ Everything works. Playback should be fine — if it is not, tell me and send this report.');
+    else if (/401/.test(p)) L.push('→ The key is missing or stale. Open Google Drive folder and press Connect once, then run this again.');
+    else if (/403/.test(p)) L.push('→ Google is refusing the file. Usually the account you signed in with cannot see that folder, or the Drive API is not enabled on the project.');
+    else if (/404/.test(p)) L.push('→ The file is not there any more — it was moved, renamed or deleted in Drive. Re-add it from the folder list.');
+    else L.push('→ Send me this report and I will read it.');
+    const text = L.join('\n');
+    if (window.OPS && OPS.showLog) OPS.showLog(text); else alert(text);
+    return text;
+  }
 
   /* Called before a cloud track loads, so the very first byte has a token.
      Best-effort on purpose: if the token we hold is still good we just hand it
@@ -8626,7 +8750,7 @@ const DRIVE = (() => {
     );
   }
 
-  return { open, listTracks, download, addStream, shareToken, ensureStreamReady };
+  return { open, listTracks, download, addStream, shareToken, ensureStreamReady, check, explain };
 })();
 window.DRIVE = DRIVE;
 
