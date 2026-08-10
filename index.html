@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-IlehuQNHgh3inXNrOgWPA7ASbmYWM/AHQ2NJH9p6hWw=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-iefrhS+6dyG4Pf7FqRVKv6KkBPVBK9X3KDqGEK4QD7Y=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-g/vC5UTMOFWXrqclaCNHXSOIOcY/UBbzVfUgLsBpDSw=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-arVoIc72KuY94bYp40ryUcd2cIOaYdUyrBB4VqJ4v14=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1022,7 +1022,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.10.0';
+const APP_VERSION = '10.11.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -9019,20 +9019,49 @@ const DRIVE = (() => {
     return (d.files || [])[0] || null;
   }
 
-  async function listTracks() {
+  /* Walk the folder AND everything inside it.
+     Anyone tidying their music makes sub-folders, and a listing that only read
+     the top level simply did not show them — which looks exactly like Drive
+     failing to sync. Each track remembers which sub-folder it came from, so
+     the same tidying appears in the app's own Folders tab. */
+  const FOLDER_MIME = 'application/vnd.google-apps.folder';
+  async function listIn(id) {
+    const kids = [];
+    let pageToken = '';
+    do {
+      const q = `'${id}' in parents and trashed=false`;
+      const d = await api(`/files?q=${encodeURIComponent(q)}&fields=nextPageToken,files(id,name,size,mimeType)` +
+        `&pageSize=200&orderBy=folder,name${pageToken ? '&pageToken=' + pageToken : ''}`);
+      (d.files || []).forEach((f) => kids.push(f));
+      pageToken = d.nextPageToken || '';
+    } while (pageToken);
+    return kids;
+  }
+
+  async function listTracks(onProgress) {
     const folder = await findFolder();
     if (!folder) throw new Error(`No folder called “${folderName()}” in your Drive. Make one and put music in it.`);
     const out = [];
-    let pageToken = '';
-    do {
-      const q = `'${folder.id}' in parents and trashed=false`;
-      const d = await api(`/files?q=${encodeURIComponent(q)}&fields=nextPageToken,files(id,name,size,mimeType)` +
-        `&pageSize=200&orderBy=name${pageToken ? '&pageToken=' + pageToken : ''}`);
-      (d.files || []).forEach((f) => {
-        if (AUD.test(f.name) || (f.mimeType || '').startsWith('audio/')) out.push(f);
-      });
-      pageToken = d.nextPageToken || '';
-    } while (pageToken);
+    const queue = [{ id: folder.id, name: folder.name, depth: 0 }];
+    const seen = new Set();
+    let folders = 0;
+    while (queue.length) {
+      const dir = queue.shift();
+      if (seen.has(dir.id)) continue;
+      seen.add(dir.id);
+      folders++;
+      if (onProgress) onProgress(dir.name, out.length, folders);
+      const kids = await listIn(dir.id);
+      for (const f of kids) {
+        if (f.mimeType === FOLDER_MIME) {
+          if (dir.depth < 6) queue.push({ id: f.id, name: f.name, depth: dir.depth + 1 });
+        } else if (AUD.test(f.name) || (f.mimeType || '').startsWith('audio/')) {
+          f.folderName = dir.name;                 /* the folder it actually sits in */
+          out.push(f);
+        }
+      }
+      if (seen.size > 200) break;                  /* a sane ceiling on a huge Drive */
+    }
     return out;
   }
 
@@ -9053,12 +9082,12 @@ const DRIVE = (() => {
     const id = uid();
     const clean = (f.name || 'Drive track').replace(/\.[a-z0-9]{2,5}$/i, '').trim();
     const track = {
-      id, title: clean, artist: 'Google Drive', album: folderName(),
+      id, title: clean, artist: 'Google Drive', album: f.folderName || folderName(),
       albumArtist: 'Google Drive', genre: 'Cloud', year: null,
       trackNo: null, bpm: null, energy: 0, tags: ['drive'], fav: false,
       playCount: 0, lastPlayed: 0, duration: 0, addedAt: Date.now(),
       fileName: f.name, mime: f.mimeType || 'audio/mpeg', size: +f.size || 0,
-      artId: null, drop: 0, folder: folderName(),
+      artId: null, drop: 0, folder: f.folderName || folderName(),
       /* the size and type travel with the address so the worker can write a
          correct Content-Range without a second call to Drive */
       streamUrl: './drive-stream/' + encodeURIComponent(f.id) +
@@ -9118,20 +9147,43 @@ const DRIVE = (() => {
       $('drvList').innerHTML = '<div class="empty">Asking Google…</div>';
       try {
         await auth(true);
-        const files = await listTracks();
-        if (!files.length) { $('drvList').innerHTML = `<div class="empty"><b>Folder is empty</b>Nothing playable in “${esc(folderName())}”.</div>`; return; }
+        const files = await listTracks((name, found, dirs) => {
+          $('drvList').innerHTML = `<div class="empty">Looking through “${esc(name)}”…<br>${found} track${found === 1 ? '' : 's'} in ${dirs} folder${dirs === 1 ? '' : 's'} so far</div>`;
+        });
+        if (!files.length) { $('drvList').innerHTML = `<div class="empty"><b>Nothing playable</b>No audio in “${esc(folderName())}” or any folder inside it.</div>`; return; }
         const total = files.reduce((a, f) => a + (+f.size || 0), 0);
-        $('drvList').innerHTML = `<div class="pad"><div class="card muted">${files.length} track${files.length > 1 ? 's' : ''} · ${(total / 1e9).toFixed(2)} GB in the folder</div>
+        /* grouped by the folder each track sits in, sub-folders included */
+        const byFolder = new Map();
+        files.forEach((f, i) => {
+          const k = f.folderName || folderName();
+          if (!byFolder.has(k)) byFolder.set(k, []);
+          byFolder.get(k).push(i);
+        });
+        const subs = byFolder.size;
+        $('drvList').innerHTML = `<div class="pad"><div class="card muted">${files.length} track${files.length > 1 ? 's' : ''} · ${(total / 1e9).toFixed(2)} GB` +
+          `${subs > 1 ? ' · across ' + subs + ' folders' : ''}</div>
             <div class="row-btns" style="padding:0">
               <button class="primary" id="drvAllStream">Add all — play from Drive</button>
               <button class="ghost" id="drvAll">Download all for offline</button>
             </div>
-            <p class="hint" style="padding:0;margin-top:8px">Tap a track to add it as a <b>cloud track</b> — it plays straight from Drive and uses no space on the phone, but needs a connection. Tap <b>&darr;</b> to keep a copy for the gym instead.</p></div>` +
-          files.map((f, i) => `<div class="row" data-drv="${i}">
-            <div class="art sm"></div>
-            <div class="r-meta"><div class="r-title">${esc(f.name)}</div>
-              <div class="r-sub">${f.size ? ((+f.size) / 1e6).toFixed(1) + ' MB' : ''}</div></div>
-            <button class="icon-btn" data-drvdl="${i}" aria-label="Download for offline">&darr;</button></div>`).join('');
+            <p class="hint" style="padding:0;margin-top:8px">Everything inside “${esc(folderName())}” is listed, sub-folders included &mdash; and each track keeps its folder when it lands in your library. Tap a track to add it as a <b>cloud track</b> &mdash; it plays straight from Drive and uses no space on the phone, but needs a connection. Tap <b>&darr;</b> to keep a copy for the gym instead.</p></div>` +
+          [...byFolder.entries()].map(([name, idx]) => {
+            const gb = idx.reduce((a, i) => a + (+files[i].size || 0), 0);
+            return (subs > 1 ? `<div class="row group" style="pointer-events:none">
+                <div class="r-meta"><div class="r-title">${esc(name)}</div>
+                  <div class="r-sub">${idx.length} track${idx.length === 1 ? '' : 's'} · ${(gb / 1e6).toFixed(0)} MB</div></div>
+                <button class="ghost" data-drvfolder="${esc(name)}" style="pointer-events:auto">Add all</button></div>` : '') +
+              idx.map((i) => `<div class="row" data-drv="${i}">
+                <div class="art sm"></div>
+                <div class="r-meta"><div class="r-title">${esc(files[i].name)}</div>
+                  <div class="r-sub">${files[i].size ? ((+files[i].size) / 1e6).toFixed(1) + ' MB' : ''}</div></div>
+                <button class="icon-btn" data-drvdl="${i}" aria-label="Download for offline">&darr;</button></div>`).join('');
+          }).join('');
+        els('#drvList [data-drvfolder]').forEach((n) => n.onclick = async (ev) => {
+          ev.stopPropagation();
+          const name = n.dataset.drvfolder;
+          await addAllStreams(files.filter((f) => (f.folderName || folderName()) === name));
+        });
         const grab = async (list) => {
           let n = 0;
           for (const f of list) {
