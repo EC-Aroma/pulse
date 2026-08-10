@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-g/vC5UTMOFWXrqclaCNHXSOIOcY/UBbzVfUgLsBpDSw=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-arVoIc72KuY94bYp40ryUcd2cIOaYdUyrBB4VqJ4v14=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-4mqwsnE7cOzJMdwaG3KqATLZJSgjaTYrWGj8BZFHjNY=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-rvp2SwLxOPX1tIqskAio8O82PW2tvvIsWcuDSxHER9g=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1022,7 +1022,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.11.0';
+const APP_VERSION = '10.11.1';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -8867,13 +8867,16 @@ const DRIVE = (() => {
   let renewTimer = 0, lastTap = 0, wantRenew = false;
   document.addEventListener('pointerdown', () => {
     lastTap = Date.now();
-    if (wantRenew) { wantRenew = false; quietRenew(); }
+    if (wantRenew) { wantRenew = false; quietRenew(); return; }
+    /* a tap is the one moment a refresh can be done invisibly, so use it:
+       anything older than forty minutes gets replaced on the spot */
+    if (token && Date.now() - tokenAt > 40 * 60 * 1000) quietRenew();
   }, true);
 
   async function quietRenew() {
     if (!clientId()) return false;
     if (!T.list().some((t) => t.driveId && !t.hasBlob)) return false;   /* no cloud music: don't bother Google */
-    if (token && Date.now() - tokenAt < 45 * 60 * 1000) { shareToken(); return true; }
+    if (token && Date.now() - tokenAt < 40 * 60 * 1000) { shareToken(); return true; }
     /* Google's sign-in opens a window, and a browser only allows that off the
        back of something you did. Asking on a timer got the whole thing blocked
        and put a "popups blocked" warning on screen. So when a refresh is due
