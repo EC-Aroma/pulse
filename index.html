@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-bS9v/MACpKc0uoAXC4ovwP3rK8haAJ383YrJPCgRpSo=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-auJBhg8fDGyEpY0VOIleY2DxybCCYiOKzUBprkM326E=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-RoobuwtNSojnI9F8Nx3/EaHan7tcWxYHi+IoV6+O28A=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-auJBhg8fDGyEpY0VOIleY2DxybCCYiOKzUBprkM326E=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1028,7 +1028,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.13.0';
+const APP_VERSION = '10.13.1';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -2198,6 +2198,8 @@ function renderFolders(box) {
   const here = sortedTracks(FOLDERS.directTracks(path).filter((t) => matches(t, S.search)), 'folder');
   const below = path ? FOLDERS.allTracks(path) : T.list();
   const crumbs = path.split('/').filter(Boolean);
+  /* how many tracks were filed by a build that only kept the last folder name */
+  const flat = T.list().filter((t) => (t.folder || '') && t.folder.indexOf('/') < 0).length;
 
   const trail = path
     ? `<div class="pad" style="padding-bottom:0"><div class="crumbs">
@@ -2208,10 +2210,12 @@ function renderFolders(box) {
   const head = `${trail}<div class="pad"><div class="row-btns" style="padding:0">
       ${below.length ? '<button class="primary" id="fdPlayAll">Play everything in here</button>' : ''}
       <button class="ghost" id="fdNew">+ New folder here</button>
-      ${path ? '<button class="ghost" id="fdManage">Manage this folder</button>' : ''}
+      ${path ? '<button class="ghost" id="fdManage">Manage this folder</button>' : '<button class="ghost" id="fdRebuild">Rebuild from a folder on my phone</button>'}
     </div>${path ? `<div class="card muted" style="margin-top:8px">${below.length} track${below.length === 1 ? '' : 's'} in <b>${esc(FOLDERS.leaf(path))}</b>${kids.length ? ' · ' + kids.length + ' folder' + (kids.length === 1 ? '' : 's') + ' inside' : ''}</div>`
-      : `<p class="hint" style="padding:0">A track lives in one folder. Music imported from a folder on your phone, or from Drive, keeps the folders it already had — parents first, then what is inside them. Deleting a folder never deletes music.<br><br>
-        <b>Music imported before this update</b> only remembers the last folder it was in, so a discography arrives as loose year folders. Fix it in one go: Settings, App, <b>Import a folder</b>, and pick the same top folder again — nothing is imported twice, everything is simply filed where it belongs.</p>`}</div>`;
+      : `<div class="card muted" style="margin-top:8px">${flat} of your ${T.list().length} track${T.list().length === 1 ? '' : 's'} ${flat === 1 ? 'has' : 'have'} no parent folder recorded${flat ? ' — they show up here as loose folders' : ''}. Pulse ${APP_VERSION}.</div>
+        <p class="hint" style="padding:0">A track lives in one folder, and a folder can sit inside another. Music imported from your phone or from Drive keeps the shape it already had.<br><br>
+        ${flat ? `<b>Imported before ${'10.12'} ?</b> Those tracks only ever recorded the last folder they were in, so a discography arrives as loose year folders with no parent. Tap <b>Rebuild from a folder on my phone</b> and pick the top folder again — the discography folder itself, not a year inside it. Nothing is imported twice; everything is simply filed where it belongs.`
+          : 'Deleting a folder never deletes music.'}</p>`}</div>`;
 
   const folderRows = kids.map((k) => {
     const full = path ? path + '/' + k : k;
@@ -2255,6 +2259,11 @@ function renderFolders(box) {
   };
   const mg = $('fdManage');
   if (mg) mg.onclick = () => folderMenu(path);
+  const rb = $('fdRebuild');
+  if (rb) rb.onclick = () => {
+    toast('Pick the folder at the very top — the one holding the others');
+    $('folderInput').click();
+  };
 }
 
 function folderMenu(path) {
