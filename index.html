@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-4mqwsnE7cOzJMdwaG3KqATLZJSgjaTYrWGj8BZFHjNY=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-rvp2SwLxOPX1tIqskAio8O82PW2tvvIsWcuDSxHER9g=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-e/J0riwOWZoGLZL9AJZYFhNCsswuOu6ba1xjOMemooc=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-BQCqI+ZqEMpBPxdnkhIsvzw180cmWY6jXTvvP6eR1ik=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -495,6 +495,11 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
 #vizSky{position:absolute;inset:0;width:100%;height:100%;display:block;z-index:0}
 #vizSky.hidden{display:none}
 
+/* folder trail across the top of the Folders tab */
+.crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding-bottom:8px}
+.crumbsep{color:var(--mut);font-size:13px}
+.art.sm.folder-art{display:grid;place-items:center;font-size:20px;background:var(--card)}
+
 </style>
 </head>
 <body>
@@ -553,6 +558,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
       <div class="sortrow" id="sortRow">
         <label>Sort</label>
         <select id="sortSelect">
+          <option value="folder">Folder, then track order</option>
           <option value="title">Title</option>
           <option value="artist">Artist</option>
           <option value="album">Album</option>
@@ -1022,7 +1028,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.11.1';
+const APP_VERSION = '10.12.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -1427,6 +1433,7 @@ const S = {
   stats: { days: {}, totalSeconds: 0, sessions: 0, artists: {}, genres: {} },
   view: 'library',
   tab: 'songs',
+  folderPath: '',        // where you are in the Folders tab
   statPeriod: 30,
   sort: 'title',
   search: '',
@@ -1478,7 +1485,9 @@ function folderOf(f) {
   if (!p || p.indexOf('/') < 0) return '';
   const parts = p.split('/').filter(Boolean);
   parts.pop();                                  /* drop the file name */
-  return parts.length ? parts[parts.length - 1] : '';
+  /* the whole path, not just the last name — that is what lets the library
+     show parents first and open into what is inside them */
+  return parts.join('/');
 }
 
 async function importFiles(fileList) {
@@ -1856,6 +1865,11 @@ function sortedTracks(list, key = S.sort) {
     case 'lastPlayed': arr.sort((a, b) => (b.lastPlayed || 0) - (a.lastPlayed || 0)); break;
     case 'bpm': arr.sort((a, b) => (a.bpm || 9999) - (b.bpm || 9999)); break;
     case 'duration': arr.sort((a, b) => (a.duration || 0) - (b.duration || 0)); break;
+    /* Sorting by title alone piles every "01 …" together, whichever album or
+       set they came from. Folder order keeps each set intact and in its own
+       running order. */
+    case 'folder': arr.sort((a, b) => c(a.folder, b.folder) || c(a.album, b.album)
+      || (a.trackNo || 0) - (b.trackNo || 0) || c(a.title, b.title)); break;
     default: arr.sort((a, b) => c(a.title, b.title) || c(a.artist, b.artist));
   }
   return arr;
@@ -1900,11 +1914,37 @@ const FOLDERS = {
     try { this.known = (await DB.get('kv', 'folders')) || []; } catch (e) { this.known = []; }
   },
   async saveKnown() { try { await DB.put('kv', this.known, 'folders'); } catch (e) {} },
+  /* every folder path in use, plus every parent of one, plus the empty ones
+     somebody made by hand */
   list() {
-    const inUse = new Set(T.list().map((t) => (t.folder || '').trim()).filter(Boolean));
-    this.known.forEach((n) => inUse.add(n));
-    return [...inUse].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    const all = new Set();
+    const add = (p) => {
+      const parts = String(p || '').split('/').filter(Boolean);
+      for (let i = 1; i <= parts.length; i++) all.add(parts.slice(0, i).join('/'));
+    };
+    T.list().forEach((t) => add(t.folder));
+    this.known.forEach(add);
+    return [...all].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
   },
+  /* what sits directly inside a path: the next name down, once each */
+  childrenOf(prefix) {
+    const p = prefix ? prefix + '/' : '';
+    const kids = new Set();
+    this.list().forEach((f) => {
+      if (!f.startsWith(p) || f === prefix) return;
+      const rest = f.slice(p.length);
+      if (!rest) return;
+      kids.add(rest.split('/')[0]);
+    });
+    return [...kids].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  },
+  /* tracks sitting directly in a folder, and everything below it */
+  directTracks(path) { return T.list().filter((t) => (t.folder || '') === path); },
+  allTracks(path) {
+    const p = path + '/';
+    return T.list().filter((t) => (t.folder || '') === path || String(t.folder || '').startsWith(p));
+  },
+  leaf(path) { const a = String(path).split('/'); return a[a.length - 1]; },
   async create(name) {
     const n = (name || '').trim();
     if (!n) return null;
@@ -1922,31 +1962,47 @@ const FOLDERS = {
     }
     if (n && !this.known.includes(n)) { this.known.push(n); await this.saveKnown(); }
   },
+  /* renaming a folder renames the branch under it too */
   async rename(from, to) {
-    const n = (to || '').trim(); if (!n) return;
-    for (const t of T.list()) if ((t.folder || '') === from) { t.folder = n; await T.save(t); }
-    this.known = this.known.filter((x) => x !== from);
-    if (!this.known.includes(n)) this.known.push(n);
+    const leaf = (to || '').trim().replace(/\//g, ' '); if (!leaf) return;
+    const parts = from.split('/'); parts.pop(); parts.push(leaf);
+    const n = parts.join('/');
+    const p = from + '/';
+    for (const t of T.list()) {
+      const f = t.folder || '';
+      if (f === from) { t.folder = n; await T.save(t); }
+      else if (f.startsWith(p)) { t.folder = n + '/' + f.slice(p.length); await T.save(t); }
+    }
+    this.known = this.known.map((x) => x === from ? n : (x.startsWith(p) ? n + '/' + x.slice(p.length) : x));
     await this.saveKnown();
+    return n;
   },
-  async remove(name) {                          /* the folder goes, the music stays */
-    for (const t of T.list()) if ((t.folder || '') === name) { t.folder = ''; await T.save(t); }
-    this.known = this.known.filter((x) => x !== name);
+  /* the folder goes, the music stays — anything inside moves up a level */
+  async remove(path) {
+    const p = path + '/';
+    const up = path.split('/').slice(0, -1).join('/');
+    for (const t of T.list()) {
+      const f = t.folder || '';
+      if (f === path) { t.folder = up; await T.save(t); }
+      else if (f.startsWith(p)) { t.folder = up ? up + '/' + f.slice(p.length) : f.slice(p.length); await T.save(t); }
+    }
+    this.known = this.known.filter((x) => x !== path && !x.startsWith(p));
     await this.saveKnown();
   },
   /* the ⋯ menu on a track */
   move(id) {
     const t = T.get(id); if (!t) return;
     const opts = this.list().map((n) => ({
-      label: (t.folder === n ? '✓ ' : '') + n,
+      label: (t.folder === n ? '✓ ' : '') + '  '.repeat(n.split('/').length - 1) + this.leaf(n),
       run: async () => { await FOLDERS.assign([id], n); toast('Moved to ' + n); render(); }
     }));
     opts.push({ label: '+ New folder…', run: async () => {
       const n = prompt('Name for the new folder'); if (!n) return;
-      await FOLDERS.create(n); await FOLDERS.assign([id], n);
-      toast('Moved to ' + n.trim()); render();
+      const full = n.trim().replace(/\//g, ' ');
+      await FOLDERS.create(full); await FOLDERS.assign([id], full);
+      toast('Moved to ' + full); render();
     } });
-    if (t.folder) opts.push({ label: 'Take it out of ' + t.folder, danger: true,
+    if (t.folder) opts.push({ label: 'Take it out of ' + this.leaf(t.folder), danger: true,
       run: async () => { await FOLDERS.assign([id], ''); toast('Taken out of the folder'); render(); } });
     actionSheet('Move “' + t.title + '”', opts);
   },
@@ -1954,7 +2010,7 @@ const FOLDERS = {
   choose(name) {
     const all = sortedTracks(T.list());
     const inIt = new Set(all.filter((t) => (t.folder || '') === name).map((t) => t.id));
-    $('pkTitle').textContent = 'Music in ' + name;
+    $('pkTitle').textContent = 'Music in ' + this.leaf(name);
     $('pkList').innerHTML = `<div class="pad"><p class="hint" style="padding:0">Tick everything that belongs in
         <b>${esc(name)}</b>. A track lives in one folder at a time, so ticking it here takes it out of any other.</p>
         <div class="row-btns" style="padding:0">
@@ -1963,10 +2019,10 @@ const FOLDERS = {
       all.map((t) => `<label class="row" style="gap:10px">
           <input type="checkbox" data-fdpick="${t.id}" ${inIt.has(t.id) ? 'checked' : ''}>
           <div class="r-meta"><div class="r-title">${esc(t.title)}</div>
-            <div class="r-sub">${esc(t.artist || '')}${t.folder && t.folder !== name ? ' · now in ' + esc(t.folder) : ''}</div></div>
+            <div class="r-sub">${esc(t.artist || '')}${t.folder && t.folder !== name ? ' · now in ' + esc(FOLDERS.leaf(t.folder)) : ''}</div></div>
         </label>`).join('');
     openSheet('pickSheet');
-    $('fdCancel').onclick = () => openGroup(name, 'folder');
+    $('fdCancel').onclick = () => { closeSheet('pickSheet'); S.folderPath = name; S.tab = 'folders'; render(); };
     $('fdSave').onclick = async () => {
       const add = [], drop = [];
       els('[data-fdpick]').forEach((c) => {
@@ -1976,9 +2032,10 @@ const FOLDERS = {
       });
       if (add.length) await FOLDERS.assign(add, name);
       if (drop.length) await FOLDERS.assign(drop, '');
-      toast(`${name}: ${add.length} added, ${drop.length} removed`);
+      toast(`${FOLDERS.leaf(name)}: ${add.length} added, ${drop.length} removed`);
+      closeSheet('pickSheet');
+      S.folderPath = name; S.tab = 'folders';
       render();
-      openGroup(name, 'folder');
     };
   }
 };
@@ -2106,22 +2163,104 @@ function renderLibrary() {
     list = sortedTracks(list);
     box.innerHTML = list.length ? list.map((t) => rowHTML(t)).join('')
       : `<div class="empty">${S.tab === 'favorites' ? '<b>No favorites yet</b>Tap ♥ on the now-playing screen, or ⋯ on any song.' : '<b>No matches</b>Try another search.'}</div>`;
+  } else if (S.tab === 'folders') {
+    renderFolders(box);
   } else {
-    const key = S.tab === 'artists' ? 'artist' : S.tab === 'albums' ? 'album' : S.tab === 'folders' ? 'folder' : 'genre';
+    const key = S.tab === 'artists' ? 'artist' : S.tab === 'albums' ? 'album' : 'genre';
     const groups = groupBy(all, key);
-    const head = key === 'folder' ? `<div class="pad"><div class="row-btns" style="padding:0">
-        <button class="primary" id="btnNewFolder">+ New folder</button></div>
-      <p class="hint" style="padding:0">Folders keep the library tidy: a track sits in one folder, and music you import
-        from a folder on your phone lands in a folder of the same name. Deleting a folder never deletes music.</p></div>` : '';
-    box.innerHTML = head + (groups.length ? groups.map(([n, ts]) => groupRowHTML(n, ts, key)).join('')
-      : `<div class="empty"><b>Nothing here</b>Nothing tagged yet.</div>`);
-    const nf = $('btnNewFolder');
-    if (nf) nf.onclick = async () => {
-      const n = prompt('Name for the new folder'); if (!n || !n.trim()) return;
-      await FOLDERS.create(n); render(); FOLDERS.choose(n.trim());
-    };
+    box.innerHTML = groups.length ? groups.map(([n, ts]) => groupRowHTML(n, ts, key)).join('')
+      : `<div class="empty"><b>Nothing here</b>Nothing tagged yet.</div>`;
   }
   hydrateArt(box);
+}
+
+/* The Folders tab: one level at a time, parents first, exactly like a folder
+   on a computer. Opening a folder shows the folders inside it and the tracks
+   that sit directly in it. */
+function renderFolders(box) {
+  const path = S.folderPath || '';
+  const kids = FOLDERS.childrenOf(path);
+  const here = sortedTracks(FOLDERS.directTracks(path).filter((t) => matches(t, S.search)), 'folder');
+  const below = path ? FOLDERS.allTracks(path) : T.list();
+  const crumbs = path.split('/').filter(Boolean);
+
+  const trail = path
+    ? `<div class="pad" style="padding-bottom:0"><div class="crumbs">
+        <button class="chip" data-fold="">All folders</button>` +
+      crumbs.map((c, i) => `<span class="crumbsep">›</span><button class="chip${i === crumbs.length - 1 ? ' on' : ''}" data-fold="${esc(crumbs.slice(0, i + 1).join('/'))}">${esc(c)}</button>`).join('') +
+      `</div></div>` : '';
+
+  const head = `${trail}<div class="pad"><div class="row-btns" style="padding:0">
+      ${below.length ? '<button class="primary" id="fdPlayAll">Play everything in here</button>' : ''}
+      <button class="ghost" id="fdNew">+ New folder here</button>
+      ${path ? '<button class="ghost" id="fdManage">Manage this folder</button>' : ''}
+    </div>${path ? `<div class="card muted" style="margin-top:8px">${below.length} track${below.length === 1 ? '' : 's'} in <b>${esc(FOLDERS.leaf(path))}</b>${kids.length ? ' · ' + kids.length + ' folder' + (kids.length === 1 ? '' : 's') + ' inside' : ''}</div>`
+      : `<p class="hint" style="padding:0">A track lives in one folder. Music imported from a folder on your phone, or from Drive, keeps the folders it already had — parents first, then what is inside them. Deleting a folder never deletes music.</p>`}</div>`;
+
+  const folderRows = kids.map((k) => {
+    const full = path ? path + '/' + k : k;
+    const n = FOLDERS.allTracks(full).length;
+    const inside = FOLDERS.childrenOf(full).length;
+    return `<div class="row group" data-fold="${esc(full)}">
+      <div class="art sm folder-art">📁</div>
+      <div class="r-meta"><div class="r-title">${esc(k)}</div>
+        <div class="r-sub">${n} track${n === 1 ? '' : 's'}${inside ? ' · ' + inside + ' folder' + (inside === 1 ? '' : 's') : ''}</div></div>
+      <button class="r-more" data-foldmore="${esc(full)}">⋯</button></div>`;
+  }).join('');
+
+  const loose = !path ? T.list().filter((t) => !(t.folder || '')).filter((t) => matches(t, S.search)) : [];
+  const trackRows = (path ? here : sortedTracks(loose, 'folder')).map((t) => rowHTML(t)).join('');
+  const label = path
+    ? (here.length ? `<div class="pad muted" style="padding-bottom:4px">Tracks in this folder</div>` : '')
+    : (loose.length ? `<div class="pad muted" style="padding-bottom:4px">Not in a folder</div>` : '');
+
+  box.innerHTML = head + folderRows + label + trackRows +
+    (!kids.length && !(path ? here.length : loose.length)
+      ? `<div class="empty"><b>Nothing in here yet</b>Use <b>+ New folder here</b>, or put tracks in from the ⋯ menu on any song.</div>` : '');
+  hydrateArt(box);
+
+  els('[data-fold]', box).forEach((n) => n.onclick = (ev) => {
+    if (ev.target.closest('[data-foldmore]')) return;
+    S.folderPath = n.dataset.fold; render(); window.scrollTo(0, 0);
+  });
+  els('[data-foldmore]', box).forEach((n) => n.onclick = (ev) => { ev.stopPropagation(); folderMenu(n.dataset.foldmore); });
+  const pa = $('fdPlayAll');
+  if (pa) pa.onclick = () => {
+    const ids = sortedTracks(below, 'folder').map((t) => t.id);
+    playQueue(ids, 0, path ? FOLDERS.leaf(path) : 'Library'); openSheet('np');
+  };
+  $('fdNew').onclick = async () => {
+    const n = prompt(path ? `Name for a folder inside “${FOLDERS.leaf(path)}”` : 'Name for the new folder');
+    if (!n || !n.trim()) return;
+    const full = (path ? path + '/' : '') + n.trim().replace(/\//g, ' ');
+    await FOLDERS.create(full);
+    render();
+    FOLDERS.choose(full);
+  };
+  const mg = $('fdManage');
+  if (mg) mg.onclick = () => folderMenu(path);
+}
+
+function folderMenu(path) {
+  const name = FOLDERS.leaf(path);
+  actionSheet(name, [
+    { label: 'Open', run: () => { S.folderPath = path; S.tab = 'folders'; render(); } },
+    { label: 'Play everything in it', run: () => { const ids = sortedTracks(FOLDERS.allTracks(path), 'folder').map((t) => t.id); if (!ids.length) { toast('Nothing in there yet'); return; } playQueue(ids, 0, name); openSheet('np'); } },
+    { label: 'Add or remove music…', run: () => FOLDERS.choose(path) },
+    { label: 'Rename…', run: async () => {
+      const n = prompt('Folder name', name); if (!n || !n.trim()) return;
+      const to = await FOLDERS.rename(path, n);
+      if (S.folderPath === path || String(S.folderPath).startsWith(path + '/')) S.folderPath = to;
+      render();
+    } },
+    { label: 'Delete folder (music stays)', danger: true, run: async () => {
+      const n = FOLDERS.allTracks(path).length;
+      if (!confirm(`Delete the folder “${name}”? Its ${n} track${n === 1 ? '' : 's'} stay in your library and move up a level.`)) return;
+      await FOLDERS.remove(path);
+      if (String(S.folderPath) === path || String(S.folderPath).startsWith(path + '/')) S.folderPath = path.split('/').slice(0, -1).join('/');
+      toast('Folder deleted, music kept'); render();
+    } }
+  ]);
 }
 
 function renderPlaylists() {
@@ -3211,6 +3350,9 @@ async function boot() {
   } catch (e) {}
   try { await loadAll(); } catch (e) { console.warn('storage unavailable, running in memory', e); }
   try { await FOLDERS.load(); } catch (e) {}
+  /* once there are folders, sorting by title alone stacks every "01 …" from
+     every set on top of each other — folder order is the tidy default */
+  if (T.list().some((t) => t.folder)) S.sort = 'folder';
   if (window.PULSE_MEMORY_ONLY) setTimeout(() => toast('Preview mode: this window cannot save files, so your library resets when you reload', 6000), 1200);
   $('sortSelect').value = S.sort;
   P.a.playbackRate = P.b.playbackRate = P.s.playbackRate = P.v.playbackRate = S.settings.speed;
@@ -9045,7 +9187,7 @@ const DRIVE = (() => {
     const folder = await findFolder();
     if (!folder) throw new Error(`No folder called “${folderName()}” in your Drive. Make one and put music in it.`);
     const out = [];
-    const queue = [{ id: folder.id, name: folder.name, depth: 0 }];
+    const queue = [{ id: folder.id, name: folder.name, path: folder.name, depth: 0 }];
     const seen = new Set();
     let folders = 0;
     while (queue.length) {
@@ -9057,9 +9199,12 @@ const DRIVE = (() => {
       const kids = await listIn(dir.id);
       for (const f of kids) {
         if (f.mimeType === FOLDER_MIME) {
-          if (dir.depth < 6) queue.push({ id: f.id, name: f.name, depth: dir.depth + 1 });
+          if (dir.depth < 6) queue.push({ id: f.id, name: f.name, path: dir.path + '/' + f.name, depth: dir.depth + 1 });
         } else if (AUD.test(f.name) || (f.mimeType || '').startsWith('audio/')) {
-          f.folderName = dir.name;                 /* the folder it actually sits in */
+          /* the whole path under your Drive folder, so the app can show the
+             same parent-then-child shape you set up in Drive */
+          f.folderName = dir.path;
+          f.folderLeaf = dir.name;
           out.push(f);
         }
       }
@@ -9085,7 +9230,7 @@ const DRIVE = (() => {
     const id = uid();
     const clean = (f.name || 'Drive track').replace(/\.[a-z0-9]{2,5}$/i, '').trim();
     const track = {
-      id, title: clean, artist: 'Google Drive', album: f.folderName || folderName(),
+      id, title: clean, artist: 'Google Drive', album: f.folderLeaf || folderName(),
       albumArtist: 'Google Drive', genre: 'Cloud', year: null,
       trackNo: null, bpm: null, energy: 0, tags: ['drive'], fav: false,
       playCount: 0, lastPlayed: 0, duration: 0, addedAt: Date.now(),
@@ -9173,7 +9318,7 @@ const DRIVE = (() => {
           [...byFolder.entries()].map(([name, idx]) => {
             const gb = idx.reduce((a, i) => a + (+files[i].size || 0), 0);
             return (subs > 1 ? `<div class="row group" style="pointer-events:none">
-                <div class="r-meta"><div class="r-title">${esc(name)}</div>
+                <div class="r-meta"><div class="r-title">${esc(name.split('/').slice(1).join(' › ') || name)}</div>
                   <div class="r-sub">${idx.length} track${idx.length === 1 ? '' : 's'} · ${(gb / 1e6).toFixed(0)} MB</div></div>
                 <button class="ghost" data-drvfolder="${esc(name)}" style="pointer-events:auto">Add all</button></div>` : '') +
               idx.map((i) => `<div class="row" data-drv="${i}">
