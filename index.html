@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-ESUfxUFLdW2YEY0YnMlYPlMIEUdWXCySrem90fBXsFw=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-2FLEgDA+VS8FlbONLRCoYM2n20hxa+s+TqZ6x+OMdQY=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-IlehuQNHgh3inXNrOgWPA7ASbmYWM/AHQ2NJH9p6hWw=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-iefrhS+6dyG4Pf7FqRVKv6KkBPVBK9X3KDqGEK4QD7Y=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -547,6 +547,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
         <button data-tab="artists">Artists</button>
         <button data-tab="albums">Albums</button>
         <button data-tab="genres">Genres</button>
+        <button data-tab="folders">Folders</button>
         <button data-tab="favorites">Favorites</button>
       </nav>
       <div class="sortrow" id="sortRow">
@@ -1021,7 +1022,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.9.0';
+const APP_VERSION = '10.10.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -1469,6 +1470,17 @@ const saveStats = () => DB.put('kv', S.stats, 'stats');
 let importAbort = false;
 const AUDIO_RE = /\.(mp3|m4a|m4b|aac|flac|ogg|opus|wav|wma|mp4|aiff?|caf)$/i;
 
+/* When a whole folder is picked the browser hands over each file with the path
+   it had inside it. The deepest folder that actually holds the file is the
+   useful name — "Tomorrowland 2024", not the drive it sits on. */
+function folderOf(f) {
+  const p = f.webkitRelativePath || f.relativePath || '';
+  if (!p || p.indexOf('/') < 0) return '';
+  const parts = p.split('/').filter(Boolean);
+  parts.pop();                                  /* drop the file name */
+  return parts.length ? parts[parts.length - 1] : '';
+}
+
 async function importFiles(fileList) {
   const files = [...fileList].filter((f) => AUDIO_RE.test(f.name) || (f.type || '').startsWith('audio/'));
   if (!files.length) { toast('No audio files found in that selection'); return; }
@@ -1499,7 +1511,9 @@ async function importFiles(fileList) {
         year: tags.year || null, trackNo: tags.trackNo || null, bpm: tags.bpm || null,
         energy: 0, tags: [], fav: false, playCount: 0, lastPlayed: 0,
         duration: Math.round(duration * 10) / 10, addedAt: Date.now(),
-        fileName: f.name, mime: f.type || '', size: f.size, artId
+        fileName: f.name, mime: f.type || '', size: f.size, artId,
+        /* picked a folder? the folder it came from becomes its folder here */
+        folder: folderOf(f)
       };
       S.tracks.set(id, track);
       await DB.put('tracks', track);
@@ -1849,11 +1863,22 @@ function sortedTracks(list, key = S.sort) {
 function matches(t, q) {
   if (!q) return true;
   const s = q.toLowerCase();
-  return [t.title, t.artist, t.album, t.albumArtist, t.genre, (t.tags || []).join(' '), t.bpm]
+  return [t.title, t.artist, t.album, t.albumArtist, t.genre, t.folder, (t.tags || []).join(' '), t.bpm]
     .some((v) => String(v || '').toLowerCase().includes(s));
 }
 function groupBy(list, key) {
   const m = new Map();
+  /* a folder name is one name, even if it has a comma in it */
+  if (key === 'folder') {
+    list.forEach((t) => {
+      const k = (t.folder || '').trim() || 'Not in a folder';
+      if (!m.has(k)) m.set(k, []);
+      m.get(k).push(t);
+    });
+    FOLDERS.list().forEach((n) => { if (!m.has(n)) m.set(n, []); });   /* show empty ones too */
+    return [...m.entries()].sort((a, b) => (a[0] === 'Not in a folder') - (b[0] === 'Not in a folder')
+      || a[0].localeCompare(b[0], undefined, { sensitivity: 'base' }));
+  }
   list.forEach((t) => {
     const raw = key === 'genre' ? (t.genre || 'Untagged') : key === 'artist' ? (t.albumArtist || t.artist || 'Unknown artist') : (t.album || 'Unknown album');
     String(raw).split(/\s*[;/]\s*|\s*,\s*/).filter(Boolean).forEach((k) => {
@@ -1864,6 +1889,100 @@ function groupBy(list, key) {
   });
   return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: 'base' }));
 }
+/* ---------- folders ----------
+   A folder is simply a name written on a track, which means nothing can get
+   lost: delete a folder and its music is still in the library, exactly where
+   it was. Empty folders are remembered separately so you can make one now and
+   fill it later. */
+const FOLDERS = {
+  known: [],                                   /* folders made by hand, incl. empty ones */
+  async load() {
+    try { this.known = (await DB.get('kv', 'folders')) || []; } catch (e) { this.known = []; }
+  },
+  async saveKnown() { try { await DB.put('kv', this.known, 'folders'); } catch (e) {} },
+  list() {
+    const inUse = new Set(T.list().map((t) => (t.folder || '').trim()).filter(Boolean));
+    this.known.forEach((n) => inUse.add(n));
+    return [...inUse].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  },
+  async create(name) {
+    const n = (name || '').trim();
+    if (!n) return null;
+    if (this.list().some((x) => x.toLowerCase() === n.toLowerCase())) { toast('That folder already exists'); return n; }
+    this.known.push(n);
+    await this.saveKnown();
+    return n;
+  },
+  async assign(ids, name) {
+    const n = (name || '').trim();
+    for (const id of ids) {
+      const t = T.get(id); if (!t) continue;
+      t.folder = n;
+      await T.save(t);
+    }
+    if (n && !this.known.includes(n)) { this.known.push(n); await this.saveKnown(); }
+  },
+  async rename(from, to) {
+    const n = (to || '').trim(); if (!n) return;
+    for (const t of T.list()) if ((t.folder || '') === from) { t.folder = n; await T.save(t); }
+    this.known = this.known.filter((x) => x !== from);
+    if (!this.known.includes(n)) this.known.push(n);
+    await this.saveKnown();
+  },
+  async remove(name) {                          /* the folder goes, the music stays */
+    for (const t of T.list()) if ((t.folder || '') === name) { t.folder = ''; await T.save(t); }
+    this.known = this.known.filter((x) => x !== name);
+    await this.saveKnown();
+  },
+  /* the ⋯ menu on a track */
+  move(id) {
+    const t = T.get(id); if (!t) return;
+    const opts = this.list().map((n) => ({
+      label: (t.folder === n ? '✓ ' : '') + n,
+      run: async () => { await FOLDERS.assign([id], n); toast('Moved to ' + n); render(); }
+    }));
+    opts.push({ label: '+ New folder…', run: async () => {
+      const n = prompt('Name for the new folder'); if (!n) return;
+      await FOLDERS.create(n); await FOLDERS.assign([id], n);
+      toast('Moved to ' + n.trim()); render();
+    } });
+    if (t.folder) opts.push({ label: 'Take it out of ' + t.folder, danger: true,
+      run: async () => { await FOLDERS.assign([id], ''); toast('Taken out of the folder'); render(); } });
+    actionSheet('Move “' + t.title + '”', opts);
+  },
+  /* tick the tracks that belong in a folder */
+  choose(name) {
+    const all = sortedTracks(T.list());
+    const inIt = new Set(all.filter((t) => (t.folder || '') === name).map((t) => t.id));
+    $('pkTitle').textContent = 'Music in ' + name;
+    $('pkList').innerHTML = `<div class="pad"><p class="hint" style="padding:0">Tick everything that belongs in
+        <b>${esc(name)}</b>. A track lives in one folder at a time, so ticking it here takes it out of any other.</p>
+        <div class="row-btns" style="padding:0">
+          <button class="primary" id="fdSave">Save</button>
+          <button class="ghost" id="fdCancel">Cancel</button></div></div>` +
+      all.map((t) => `<label class="row" style="gap:10px">
+          <input type="checkbox" data-fdpick="${t.id}" ${inIt.has(t.id) ? 'checked' : ''}>
+          <div class="r-meta"><div class="r-title">${esc(t.title)}</div>
+            <div class="r-sub">${esc(t.artist || '')}${t.folder && t.folder !== name ? ' · now in ' + esc(t.folder) : ''}</div></div>
+        </label>`).join('');
+    openSheet('pickSheet');
+    $('fdCancel').onclick = () => openGroup(name, 'folder');
+    $('fdSave').onclick = async () => {
+      const add = [], drop = [];
+      els('[data-fdpick]').forEach((c) => {
+        const id = c.dataset.fdpick;
+        if (c.checked && !inIt.has(id)) add.push(id);
+        if (!c.checked && inIt.has(id)) drop.push(id);
+      });
+      if (add.length) await FOLDERS.assign(add, name);
+      if (drop.length) await FOLDERS.assign(drop, '');
+      toast(`${name}: ${add.length} added, ${drop.length} removed`);
+      render();
+      openGroup(name, 'folder');
+    };
+  }
+};
+
 function smartLists() {
   const all = T.list();
   const day = 86400000;
@@ -1988,9 +2107,19 @@ function renderLibrary() {
     box.innerHTML = list.length ? list.map((t) => rowHTML(t)).join('')
       : `<div class="empty">${S.tab === 'favorites' ? '<b>No favorites yet</b>Tap ♥ on the now-playing screen, or ⋯ on any song.' : '<b>No matches</b>Try another search.'}</div>`;
   } else {
-    const key = S.tab === 'artists' ? 'artist' : S.tab === 'albums' ? 'album' : 'genre';
+    const key = S.tab === 'artists' ? 'artist' : S.tab === 'albums' ? 'album' : S.tab === 'folders' ? 'folder' : 'genre';
     const groups = groupBy(all, key);
-    box.innerHTML = groups.length ? groups.map(([n, ts]) => groupRowHTML(n, ts, key)).join('') : `<div class="empty"><b>Nothing here</b>Nothing tagged yet.</div>`;
+    const head = key === 'folder' ? `<div class="pad"><div class="row-btns" style="padding:0">
+        <button class="primary" id="btnNewFolder">+ New folder</button></div>
+      <p class="hint" style="padding:0">Folders keep the library tidy: a track sits in one folder, and music you import
+        from a folder on your phone lands in a folder of the same name. Deleting a folder never deletes music.</p></div>` : '';
+    box.innerHTML = head + (groups.length ? groups.map(([n, ts]) => groupRowHTML(n, ts, key)).join('')
+      : `<div class="empty"><b>Nothing here</b>Nothing tagged yet.</div>`);
+    const nf = $('btnNewFolder');
+    if (nf) nf.onclick = async () => {
+      const n = prompt('Name for the new folder'); if (!n || !n.trim()) return;
+      await FOLDERS.create(n); render(); FOLDERS.choose(n.trim());
+    };
   }
   hydrateArt(box);
 }
@@ -2282,6 +2411,7 @@ function trackMenu(id) {
     { label: t.fav ? 'Remove from favorites' : 'Add to favorites', run: () => toggleFav(id) },
     { label: 'Add to playlist…', run: () => pickPlaylist(id) },
     { label: 'Start radio from this track', run: () => radioFrom(t) },
+    { label: t.folder ? 'Move folder (now in ' + t.folder + ')…' : 'Put it in a folder…', run: () => FOLDERS.move(id) },
     { label: 'Rename…', run: () => RENAME.open(id) },
     { label: 'Edit tags / BPM', run: () => openEditor(id) },
     { label: 'Detect BPM & loudness', run: async () => { toast('Analysing…'); try { const r = await FX.analyseTrack(id, { force: true }); toast(r && r.bpm ? `${r.bpm} BPM detected` : 'Could not detect a tempo'); render(); } catch (e) { toast('Analysis failed'); } } },
@@ -2319,10 +2449,10 @@ function radioFrom(t) {
 
 /* ---------- drill down ---------- */
 function openGroup(name, kind) {
-  const key = kind === 'artist' ? 'artist' : kind === 'album' ? 'album' : 'genre';
+  const key = kind === 'artist' ? 'artist' : kind === 'album' ? 'album' : kind === 'folder' ? 'folder' : 'genre';
   const list = groupBy(T.list(), key).find(([n]) => n === name);
   const tracks = list ? sortedTracks(list[1], kind === 'album' ? 'album' : 'artist') : [];
-  openList(name, tracks, { kind, showAlbum: kind !== 'album' });
+  openList(name, tracks, { kind, showAlbum: kind !== 'album', folder: kind === 'folder' ? name : '' });
 }
 function openList(title, tracks, opts = {}) {
   $('pkTitle').textContent = title;
@@ -2331,7 +2461,10 @@ function openList(title, tracks, opts = {}) {
       <button class="primary" data-playall="1">Play all</button>
       <button class="ghost" data-shufall="1">Shuffle</button>
       ${opts.playlistId ? '<button class="ghost" data-plrename="1">Rename</button>' : ''}
-    </div></div>`;
+    </div>${opts.folder && opts.folder !== 'Not in a folder' ? `<div class="row-btns" style="padding:8px 0 0">
+      <button class="ghost" data-fdadd="1">Add or remove music</button>
+      <button class="ghost" data-fdren="1">Rename folder</button>
+      <button class="ghost" data-fddel="1">Delete folder</button></div>` : ''}</div>`;
   $('pkList').innerHTML = head + (tracks.length ? tracks.map((t) => rowHTML(t, opts)).join('') : '<div class="empty">Empty.</div>');
   hydrateArt($('pkList'));
   openSheet('pickSheet');
@@ -2343,6 +2476,17 @@ function openList(title, tracks, opts = {}) {
     const n = prompt('Playlist name', p.name); if (!n) return;
     p.name = n.trim(); await DB.put('playlists', p); $('pkTitle').textContent = p.name; renderPlaylists();
   };
+  if (opts.folder && opts.folder !== 'Not in a folder') {
+    el('[data-fdadd]', $('pkList')).onclick = () => FOLDERS.choose(opts.folder);
+    el('[data-fdren]', $('pkList')).onclick = async () => {
+      const n = prompt('Folder name', opts.folder); if (!n || !n.trim()) return;
+      await FOLDERS.rename(opts.folder, n); render(); openGroup(n.trim(), 'folder');
+    };
+    el('[data-fddel]', $('pkList')).onclick = async () => {
+      if (!confirm(`Delete the folder “${opts.folder}”? The ${tracks.length} track${tracks.length === 1 ? '' : 's'} inside stay in your library.`)) return;
+      await FOLDERS.remove(opts.folder); toast('Folder deleted, music kept'); render(); closeSheet('pickSheet');
+    };
+  }
   $('pkList').dataset.ctx = JSON.stringify({ ids, title, playlistId: opts.playlistId || '' });
 }
 
@@ -3066,6 +3210,7 @@ async function boot() {
     if (early && early.look) { S.settings.look = early.look; if (window.THEME) THEME.apply(); }
   } catch (e) {}
   try { await loadAll(); } catch (e) { console.warn('storage unavailable, running in memory', e); }
+  try { await FOLDERS.load(); } catch (e) {}
   if (window.PULSE_MEMORY_ONLY) setTimeout(() => toast('Preview mode: this window cannot save files, so your library resets when you reload', 6000), 1200);
   $('sortSelect').value = S.sort;
   P.a.playbackRate = P.b.playbackRate = P.s.playbackRate = P.v.playbackRate = S.settings.speed;
@@ -8719,16 +8864,27 @@ const DRIVE = (() => {
      the key up before it expires while the app is open. Nothing is stored —
      Google is simply asked again, without a prompt, using the account that
      granted access last time. */
-  let renewTimer = 0;
+  let renewTimer = 0, lastTap = 0, wantRenew = false;
+  document.addEventListener('pointerdown', () => {
+    lastTap = Date.now();
+    if (wantRenew) { wantRenew = false; quietRenew(); }
+  }, true);
+
   async function quietRenew() {
     if (!clientId()) return false;
     if (!T.list().some((t) => t.driveId && !t.hasBlob)) return false;   /* no cloud music: don't bother Google */
     if (token && Date.now() - tokenAt < 45 * 60 * 1000) { shareToken(); return true; }
+    /* Google's sign-in opens a window, and a browser only allows that off the
+       back of something you did. Asking on a timer got the whole thing blocked
+       and put a "popups blocked" warning on screen. So when a refresh is due
+       and you have not touched the screen in the last few seconds, wait and do
+       it on your very next tap — anywhere in the app, on any button. */
+    if (Date.now() - lastTap > 4000) { wantRenew = true; return false; }
     try { await auth(false); shareToken(); return true; } catch (e) { return false; }
   }
   function autoConnect() {
     if (S.settings.driveAuto === false) return;      /* on unless turned off */
-    setTimeout(quietRenew, 1200);          /* let the app finish opening first */
+    setTimeout(quietRenew, 1500);          /* let the app finish opening first */
     clearInterval(renewTimer);
     renewTimer = setInterval(quietRenew, 10 * 60 * 1000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) quietRenew(); });
@@ -8902,7 +9058,7 @@ const DRIVE = (() => {
       trackNo: null, bpm: null, energy: 0, tags: ['drive'], fav: false,
       playCount: 0, lastPlayed: 0, duration: 0, addedAt: Date.now(),
       fileName: f.name, mime: f.mimeType || 'audio/mpeg', size: +f.size || 0,
-      artId: null, drop: 0,
+      artId: null, drop: 0, folder: folderName(),
       /* the size and type travel with the address so the worker can write a
          correct Content-Range without a second call to Drive */
       streamUrl: './drive-stream/' + encodeURIComponent(f.id) +
