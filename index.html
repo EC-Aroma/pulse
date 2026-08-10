@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-RoobuwtNSojnI9F8Nx3/EaHan7tcWxYHi+IoV6+O28A=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-auJBhg8fDGyEpY0VOIleY2DxybCCYiOKzUBprkM326E=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-D3WkIA5o6OdjwbK2AGU96BfIEgnz3fBApQfcbjXYZ3o=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-3tVx44QAbDrLkc5c9KaaTb2gKzpbGQPVG/rV0X+v/a0=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1028,7 +1028,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.13.1';
+const APP_VERSION = '10.14.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -9212,7 +9212,10 @@ const DRIVE = (() => {
     const folder = await findFolder();
     if (!folder) throw new Error(`No folder called “${folderName()}” in your Drive. Make one and put music in it.`);
     const out = [];
-    const queue = [{ id: folder.id, name: folder.name, path: folder.name, depth: 0 }];
+    /* Paths are relative to your Drive folder: everything inside it would
+       otherwise sit under one pointless "Pulse music" level. Files sitting
+       loose in it get no folder at all, which is what they are. */
+    const queue = [{ id: folder.id, name: folder.name, path: '', depth: 0 }];
     const seen = new Set();
     let folders = 0;
     while (queue.length) {
@@ -9224,12 +9227,12 @@ const DRIVE = (() => {
       const kids = await listIn(dir.id);
       for (const f of kids) {
         if (f.mimeType === FOLDER_MIME) {
-          if (dir.depth < 6) queue.push({ id: f.id, name: f.name, path: dir.path + '/' + f.name, depth: dir.depth + 1 });
+          if (dir.depth < 6) queue.push({ id: f.id, name: f.name, path: (dir.path ? dir.path + '/' : '') + f.name, depth: dir.depth + 1 });
         } else if (AUD.test(f.name) || (f.mimeType || '').startsWith('audio/')) {
           /* the whole path under your Drive folder, so the app can show the
              same parent-then-child shape you set up in Drive */
-          f.folderName = dir.path;
-          f.folderLeaf = dir.name;
+          f.folderName = dir.path;                 /* '' when it sits in the top folder */
+          f.folderLeaf = dir.path ? dir.name : '';
           out.push(f);
         }
       }
@@ -9249,13 +9252,13 @@ const DRIVE = (() => {
   /* A streamed track keeps no audio on the phone: its URL points at the
      service worker, which fetches from Drive on demand. Saving it offline
      later goes through the very same URL, so nothing special is needed. */
+  let refiled = 0;                 /* tracks whose folder was corrected this run */
   async function addStream(f) {
     const existing = T.list().find((t) => t.driveId === f.id);
     if (existing) {
       /* already here — but its folder may have moved in Drive since */
-      const want = f.folderName || folderName();
-      if (want && (existing.folder || '') !== want) { existing.folder = want; await T.save(existing); render(); }
-      toast('Already in your library');
+      const want = f.folderName || '';
+      if ((existing.folder || '') !== want) { existing.folder = want; await T.save(existing); refiled++; render(); }
       return existing.id;
     }
     const id = uid();
@@ -9266,7 +9269,7 @@ const DRIVE = (() => {
       trackNo: null, bpm: null, energy: 0, tags: ['drive'], fav: false,
       playCount: 0, lastPlayed: 0, duration: 0, addedAt: Date.now(),
       fileName: f.name, mime: f.mimeType || 'audio/mpeg', size: +f.size || 0,
-      artId: null, drop: 0, folder: f.folderName || folderName(),
+      artId: null, drop: 0, folder: f.folderName || '',
       /* the size and type travel with the address so the worker can write a
          correct Content-Range without a second call to Drive */
       streamUrl: './drive-stream/' + encodeURIComponent(f.id) +
@@ -9280,9 +9283,15 @@ const DRIVE = (() => {
   }
 
   async function addAllStreams(files) {
-    let n = 0;
-    for (const f of files) { if (await addStream(f)) n++; }
-    toast(`${n} added — playing from Drive, nothing stored`);
+    const before = T.list().length;
+    refiled = 0;
+    for (const f of files) await addStream(f);
+    const added = T.list().length - before;
+    /* Adding the same folder twice is how you repair a library filed by an
+       older version, so say what actually happened rather than a bare count. */
+    toast(added
+      ? `${added} added — playing from Drive, nothing stored` + (refiled ? `, ${refiled} refiled` : '')
+      : (refiled ? `${refiled} track${refiled === 1 ? '' : 's'} put in the right folder` : 'Already in your library'));
     render();
   }
 
@@ -9327,14 +9336,14 @@ const DRIVE = (() => {
       try {
         await auth(true);
         const files = await listTracks((name, found, dirs) => {
-          $('drvList').innerHTML = `<div class="empty">Looking through “${esc(name)}”…<br>${found} track${found === 1 ? '' : 's'} in ${dirs} folder${dirs === 1 ? '' : 's'} so far</div>`;
+          $('drvList').innerHTML = `<div class="empty">Looking through “${esc(name || folderName())}”…<br>${found} track${found === 1 ? '' : 's'} in ${dirs} folder${dirs === 1 ? '' : 's'} so far</div>`;
         });
         if (!files.length) { $('drvList').innerHTML = `<div class="empty"><b>Nothing playable</b>No audio in “${esc(folderName())}” or any folder inside it.</div>`; return; }
         const total = files.reduce((a, f) => a + (+f.size || 0), 0);
         /* grouped by the folder each track sits in, sub-folders included */
         const byFolder = new Map();
         files.forEach((f, i) => {
-          const k = f.folderName || folderName();
+          const k = f.folderName || '';
           if (!byFolder.has(k)) byFolder.set(k, []);
           byFolder.get(k).push(i);
         });
@@ -9344,12 +9353,13 @@ const DRIVE = (() => {
             <div class="row-btns" style="padding:0">
               <button class="primary" id="drvAllStream">Add all — play from Drive</button>
               <button class="ghost" id="drvAll">Download all for offline</button>
+              <button class="ghost" id="drvRefile">Fix folders on tracks I already added</button>
             </div>
             <p class="hint" style="padding:0;margin-top:8px">Everything inside “${esc(folderName())}” is listed, sub-folders included &mdash; and each track keeps its folder when it lands in your library. Tap a track to add it as a <b>cloud track</b> &mdash; it plays straight from Drive and uses no space on the phone, but needs a connection. Tap <b>&darr;</b> to keep a copy for the gym instead.</p></div>` +
           [...byFolder.entries()].map(([name, idx]) => {
             const gb = idx.reduce((a, i) => a + (+files[i].size || 0), 0);
             return (subs > 1 ? `<div class="row group" style="pointer-events:none">
-                <div class="r-meta"><div class="r-title">${esc(name.split('/').slice(1).join(' › ') || name)}</div>
+                <div class="r-meta"><div class="r-title">${esc(name ? name.split('/').join(' › ') : 'Loose in ' + folderName())}</div>
                   <div class="r-sub">${idx.length} track${idx.length === 1 ? '' : 's'} · ${(gb / 1e6).toFixed(0)} MB</div></div>
                 <button class="ghost" data-drvfolder="${esc(name)}" style="pointer-events:auto">Add all</button></div>` : '') +
               idx.map((i) => `<div class="row" data-drv="${i}">
@@ -9361,7 +9371,7 @@ const DRIVE = (() => {
         els('#drvList [data-drvfolder]').forEach((n) => n.onclick = async (ev) => {
           ev.stopPropagation();
           const name = n.dataset.drvfolder;
-          await addAllStreams(files.filter((f) => (f.folderName || folderName()) === name));
+          await addAllStreams(files.filter((f) => (f.folderName || '') === name));
         });
         const grab = async (list) => {
           let n = 0;
@@ -9382,6 +9392,18 @@ const DRIVE = (() => {
           grab([files[+n.dataset.drvdl]]);
         });
         $('drvAllStream').onclick = () => addAllStreams(files);
+        const fx2 = $('drvRefile');
+        if (fx2) fx2.onclick = async () => {
+          refiled = 0;
+          for (const f of files) {
+            const t = T.list().find((x) => x.driveId === f.id);
+            if (!t) continue;
+            const want = f.folderName || '';
+            if ((t.folder || '') !== want) { t.folder = want; await T.save(t); refiled++; }
+          }
+          toast(refiled ? `${refiled} track${refiled === 1 ? '' : 's'} put in the right folder` : 'Everything was already filed correctly');
+          render();
+        };
         $('drvAll').onclick = () => grab(files);
       } catch (e) {
         const msg = (e && e.message) || String(e);
