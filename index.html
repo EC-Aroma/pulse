@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-D3WkIA5o6OdjwbK2AGU96BfIEgnz3fBApQfcbjXYZ3o=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-3tVx44QAbDrLkc5c9KaaTb2gKzpbGQPVG/rV0X+v/a0=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-8STasH2ZKqnaIIMpFTwwQBNKHVAdVQnwE6f7KjZHtmM=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-vc2rGv5tPRQ3AjyGNGr3ycWH0GPT7+GfSn+IeyObO/g=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1028,7 +1028,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.14.0';
+const APP_VERSION = '10.15.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -2210,7 +2210,7 @@ function renderFolders(box) {
   const head = `${trail}<div class="pad"><div class="row-btns" style="padding:0">
       ${below.length ? '<button class="primary" id="fdPlayAll">Play everything in here</button>' : ''}
       <button class="ghost" id="fdNew">+ New folder here</button>
-      ${path ? '<button class="ghost" id="fdManage">Manage this folder</button>' : '<button class="ghost" id="fdRebuild">Rebuild from a folder on my phone</button>'}
+      ${path ? '<button class="ghost" id="fdManage">Manage this folder</button>' : '<button class="ghost" id="fdRebuild">Rebuild the folder tree</button>'}
     </div>${path ? `<div class="card muted" style="margin-top:8px">${below.length} track${below.length === 1 ? '' : 's'} in <b>${esc(FOLDERS.leaf(path))}</b>${kids.length ? ' · ' + kids.length + ' folder' + (kids.length === 1 ? '' : 's') + ' inside' : ''}</div>`
       : `<div class="card muted" style="margin-top:8px">${flat} of your ${T.list().length} track${T.list().length === 1 ? '' : 's'} ${flat === 1 ? 'has' : 'have'} no parent folder recorded${flat ? ' — they show up here as loose folders' : ''}. Pulse ${APP_VERSION}.</div>
         <p class="hint" style="padding:0">A track lives in one folder, and a folder can sit inside another. Music imported from your phone or from Drive keeps the shape it already had.<br><br>
@@ -2260,7 +2260,19 @@ function renderFolders(box) {
   const mg = $('fdManage');
   if (mg) mg.onclick = () => folderMenu(path);
   const rb = $('fdRebuild');
-  if (rb) rb.onclick = () => {
+  if (rb) rb.onclick = async () => {
+    /* cloud tracks can be repaired from Drive itself; phone imports need the
+       folder picking again, because only the file picker knows the path */
+    if (window.DRIVE && T.list().some((t) => t.driveId)) {
+      rb.textContent = 'Asking Drive…';
+      try {
+        T.list().forEach((t) => { if (t.driveId) t.folderChecked = false; });
+        const n = await DRIVE.repairFolders((done, total) => { rb.textContent = `Checking ${done} of ${total}…`; });
+        toast(n ? `${n} track${n === 1 ? '' : 's'} put back under the right folder` : 'Cloud tracks were already filed correctly');
+        render();
+        return;
+      } catch (e) { toast('Could not reach Drive — ' + ((e && e.message) || e)); rb.textContent = 'Rebuild the folder tree'; }
+    }
     toast('Pick the folder at the very top — the one holding the others');
     $('folderInput').click();
   };
@@ -9043,15 +9055,28 @@ const DRIVE = (() => {
   async function quietRenew() {
     if (!clientId()) return false;
     if (!T.list().some((t) => t.driveId && !t.hasBlob)) return false;   /* no cloud music: don't bother Google */
-    if (token && Date.now() - tokenAt < 40 * 60 * 1000) { shareToken(); return true; }
+    if (token && Date.now() - tokenAt < 40 * 60 * 1000) { shareToken(); autoRepair(); return true; }
     /* Google's sign-in opens a window, and a browser only allows that off the
        back of something you did. Asking on a timer got the whole thing blocked
        and put a "popups blocked" warning on screen. So when a refresh is due
        and you have not touched the screen in the last few seconds, wait and do
        it on your very next tap — anywhere in the app, on any button. */
     if (Date.now() - lastTap > 4000) { wantRenew = true; return false; }
-    try { await auth(false); shareToken(); return true; } catch (e) { return false; }
+    try { await auth(false); shareToken(); autoRepair(); return true; } catch (e) { return false; }
   }
+  /* Once connected, quietly put every cloud track back under the folder it
+     really lives in. Runs at most once per session and only for tracks that
+     have never been checked, so it costs nothing after the first time. */
+  let repairRan = false;
+  async function autoRepair() {
+    if (repairRan || !needsRepair()) return;
+    repairRan = true;
+    try {
+      const n = await repairFolders();
+      if (n) toast(`${n} track${n === 1 ? '' : 's'} put back under the right folder`);
+    } catch (e) { repairRan = false; }
+  }
+
   function autoConnect() {
     if (S.settings.driveAuto === false) return;      /* on unless turned off */
     setTimeout(quietRenew, 1500);          /* let the app finish opening first */
@@ -9241,6 +9266,52 @@ const DRIVE = (() => {
     return out;
   }
 
+  /* ---------- repair the folder tree from Drive itself ----------
+     Every cloud track remembers its Drive file id, and Drive can say which
+     folder a file is in and which folder that one is in. So the whole tree can
+     be rebuilt from what is already in the library — no re-listing, no
+     re-adding, nothing for you to pick. */
+  const dirCache = new Map();
+  async function dirInfo(id) {
+    if (dirCache.has(id)) return dirCache.get(id);
+    const d = await api(`/files/${id}?fields=id,name,parents`);
+    const info = { name: d.name || '', parent: (d.parents || [])[0] || null };
+    dirCache.set(id, info);
+    return info;
+  }
+  async function pathOf(fileId, rootId) {
+    const d = await api(`/files/${fileId}?fields=parents`);
+    let p = (d.parents || [])[0] || null;
+    const parts = [];
+    for (let i = 0; i < 8 && p && p !== rootId; i++) {
+      const info = await dirInfo(p);
+      if (!info || !info.name) break;
+      parts.unshift(info.name);
+      p = info.parent;
+    }
+    return parts.join('/');           /* '' means it sits in your Drive folder */
+  }
+  async function repairFolders(onProgress) {
+    const list = T.list().filter((t) => t.driveId && !t.folderChecked);
+    if (!list.length) return 0;
+    const folder = await findFolder();
+    if (!folder) throw new Error(`No folder called “${folderName()}” in your Drive`);
+    let fixed = 0;
+    for (let i = 0; i < list.length; i++) {
+      const t = list[i];
+      try {
+        const p = await pathOf(t.driveId, folder.id);
+        if ((t.folder || '') !== p) { t.folder = p; fixed++; }
+        t.folderChecked = true;
+        await T.save(t);
+      } catch (e) { /* one awkward file must not stop the rest */ }
+      if (onProgress) onProgress(i + 1, list.length, fixed);
+    }
+    render();
+    return fixed;
+  }
+  const needsRepair = () => T.list().filter((t) => t.driveId && !t.folderChecked).length;
+
   async function download(f) {
     const t = await auth(false);
     const r = await fetch(`${API}/files/${f.id}?alt=media`, { headers: { Authorization: 'Bearer ' + t } });
@@ -9394,14 +9465,12 @@ const DRIVE = (() => {
         $('drvAllStream').onclick = () => addAllStreams(files);
         const fx2 = $('drvRefile');
         if (fx2) fx2.onclick = async () => {
-          refiled = 0;
-          for (const f of files) {
-            const t = T.list().find((x) => x.driveId === f.id);
-            if (!t) continue;
-            const want = f.folderName || '';
-            if ((t.folder || '') !== want) { t.folder = want; await T.save(t); refiled++; }
-          }
-          toast(refiled ? `${refiled} track${refiled === 1 ? '' : 's'} put in the right folder` : 'Everything was already filed correctly');
+          T.list().forEach((t) => { if (t.driveId) t.folderChecked = false; });
+          const n = await repairFolders((done, total) => {
+            fx2.textContent = `Checking ${done} of ${total}…`;
+          });
+          fx2.textContent = 'Fix folders on tracks I already added';
+          toast(n ? `${n} track${n === 1 ? '' : 's'} put in the right folder` : 'Everything was already filed correctly');
           render();
         };
         $('drvAll').onclick = () => grab(files);
@@ -9428,7 +9497,7 @@ const DRIVE = (() => {
     );
   }
 
-  return { open, listTracks, download, addStream, shareToken, ensureStreamReady, check, explain, autoConnect, quietRenew };
+  return { open, listTracks, download, addStream, shareToken, ensureStreamReady, check, explain, autoConnect, quietRenew, repairFolders, needsRepair };
 })();
 window.DRIVE = DRIVE;
 
