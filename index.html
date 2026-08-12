@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-y4efxmvx3TMgVmBvUTYvme1NwPZLICaVs9hUAvA2lUo=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-g11R/Fx8USVhhfvQ20g89gdgPJF4JL86210ii1OdOPE=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-bIsJHfF1s1XjfNFWkEb8F+3HgjNSIM7WDbpVYjvNDcU=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-hDcykE1zt4enCluT+SZpnc3ALChXz8NxrXvm9QgmnGQ=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1028,7 +1028,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.16.0';
+const APP_VERSION = '10.17.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -2267,9 +2267,9 @@ function renderFolders(box) {
       rb.textContent = 'Asking Drive…';
       try {
         T.list().forEach((t) => { if (t.driveId) t.folderChecked = false; });
-        const n = await DRIVE.repairFolders((found) => { rb.textContent = `Reading Drive… ${found} folders`; });
+        const n = await DRIVE.repairFolders((dirs, files) => { rb.textContent = `Reading Drive… ${dirs} folders, ${files} tracks`; });
         const r = DRIVE.lastRepair || {};
-        toast(n ? `${n} track${n === 1 ? '' : 's'} moved under their parent folder`
+        toast(n ? `${n} track${n === 1 ? '' : 's'} filed from Drive (${r.folders} folders read)`
           : `Read ${r.folders || 0} folders from Drive — nothing to change`);
         render();
         return;
@@ -9269,62 +9269,84 @@ const DRIVE = (() => {
   }
 
   /* ---------- rebuild the folder tree from Drive ----------
-     Ask Drive for its FOLDERS only — a handful of requests, no matter how
-     many tracks you own — and build the full path of every folder under your
-     Pulse music folder. A track filed as "1975 - High Voltage" then simply
-     becomes "AC-DC - Discography 1975-2020 (FLAC) 88/1975 - High Voltage".
-     Doing this per track meant one request per file, which for a library of
-     nine hundred was hopeless; this is the same answer in ten. */
-  const FOLDER_Q = "mimeType='application/vnd.google-apps.folder' and trashed=false";
-  async function folderTree(onProgress) {
+     Matching on folder NAMES cannot work: a Drive holds four different folders
+     called "CD1", one per double album, and merging them puts six tracks named
+     "01" in one heap. So this walks your Drive folder and notes, for every
+     audio file, its id and the full path of the folder it sits in — then files
+     each track by its own id. No names, no guessing, no collisions. */
+  const FOLDER_MIME2 = 'application/vnd.google-apps.folder';
+  async function driveIndex(onProgress) {
     const root = await findFolder();
     if (!root) throw new Error(`No folder called “${folderName()}” in your Drive`);
-    const paths = [];                       /* every folder path under the root */
+    const byId = new Map();                 /* drive file id -> folder path */
+    const paths = [];                       /* every folder path, for name fallback */
     const queue = [{ id: root.id, path: '' }];
     const seen = new Set();
+    let files = 0;
     while (queue.length) {
       const dir = queue.shift();
       if (seen.has(dir.id)) continue;
       seen.add(dir.id);
       let pageToken = '';
       do {
-        const q = `'${dir.id}' in parents and ${FOLDER_Q}`;
-        const d = await api(`/files?q=${encodeURIComponent(q)}&fields=nextPageToken,files(id,name)` +
-          `&pageSize=200&orderBy=name${pageToken ? '&pageToken=' + pageToken : ''}`);
+        const q = `'${dir.id}' in parents and trashed=false`;
+        const d = await api(`/files?q=${encodeURIComponent(q)}&fields=nextPageToken,files(id,name,mimeType)` +
+          `&pageSize=1000&orderBy=folder,name${pageToken ? '&pageToken=' + pageToken : ''}`);
         (d.files || []).forEach((f) => {
-          const p = (dir.path ? dir.path + '/' : '') + f.name;
-          paths.push(p);
-          if (p.split('/').length < 7) queue.push({ id: f.id, path: p });
+          if (f.mimeType === FOLDER_MIME2) {
+            const p = (dir.path ? dir.path + '/' : '') + f.name;
+            paths.push(p);
+            if (p.split('/').length < 8) queue.push({ id: f.id, path: p });
+          } else if (AUD.test(f.name) || (f.mimeType || '').startsWith('audio/')) {
+            byId.set(f.id, dir.path);
+            files++;
+          }
         });
         pageToken = d.nextPageToken || '';
       } while (pageToken);
-      if (onProgress) onProgress(paths.length, seen.size);
-      if (seen.size > 400) break;
+      if (onProgress) onProgress(seen.size, files, queue.length);
+      if (seen.size > 600) break;
     }
-    return paths;
+    return { byId, paths };
   }
 
-  /* Match on the folder name a track already carries. A name that appears in
-     two different places is left alone rather than guessed at. */
-  async function repairFolders(onProgress) {
-    const paths = await folderTree(onProgress);
+  let repairing = null;
+  function repairFolders(onProgress) {
+    /* the automatic pass and the button must never run at the same time —
+       two runs would each do half the work and report half the number */
+    if (repairing) return repairing;
+    repairing = doRepair(onProgress).finally(() => { repairing = null; });
+    return repairing;
+  }
+  async function doRepair(onProgress) {
+    const { byId, paths } = await driveIndex(onProgress);
+    let fixed = 0, unknown = 0, ambiguous = 0;
+    /* exact, by the file's own id */
+    for (const t of T.list()) {
+      if (!t.driveId) continue;
+      if (!byId.has(t.driveId)) { unknown++; continue; }
+      const p = byId.get(t.driveId);
+      if ((t.folder || '') !== p) { t.folder = p; await T.save(t); fixed++; }
+      t.folderChecked = true;
+    }
+    /* anything imported from the phone can only be matched by name, and only
+       when that name exists in exactly one place */
     const byLeaf = new Map();
     paths.forEach((p) => {
       const leaf = p.split('/').pop();
       if (!byLeaf.has(leaf)) byLeaf.set(leaf, []);
       byLeaf.get(leaf).push(p);
     });
-    let fixed = 0, ambiguous = 0;
     for (const t of T.list()) {
+      if (t.driveId) continue;
       const cur = (t.folder || '').trim();
-      if (!cur || cur.indexOf('/') >= 0) continue;      /* already a full path */
+      if (!cur || cur.indexOf('/') >= 0) continue;
       const hits = byLeaf.get(cur);
       if (!hits) continue;
       if (hits.length > 1) { ambiguous++; continue; }
       if (hits[0] !== cur) { t.folder = hits[0]; await T.save(t); fixed++; }
     }
-    T.list().forEach((t) => { if (t.driveId) t.folderChecked = true; });
-    lastRepair = { fixed, ambiguous, folders: paths.length };
+    lastRepair = { fixed, unknown, ambiguous, folders: paths.length, files: byId.size };
     render();
     return fixed;
   }
@@ -9485,7 +9507,7 @@ const DRIVE = (() => {
         const fx2 = $('drvRefile');
         if (fx2) fx2.onclick = async () => {
           T.list().forEach((t) => { if (t.driveId) t.folderChecked = false; });
-          const n = await repairFolders((found) => { fx2.textContent = `Reading Drive… ${found} folders`; });
+          const n = await repairFolders((dirs, files) => { fx2.textContent = `Reading Drive… ${dirs} folders, ${files} tracks`; });
           fx2.textContent = 'Fix folders on tracks I already added';
           toast(n ? `${n} track${n === 1 ? '' : 's'} put in the right folder` : 'Everything was already filed correctly');
           render();
