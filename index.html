@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-bIsJHfF1s1XjfNFWkEb8F+3HgjNSIM7WDbpVYjvNDcU=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-hDcykE1zt4enCluT+SZpnc3ALChXz8NxrXvm9QgmnGQ=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-ZTFISPg2X++EFIIJpAYn2ZOOGUmm/iZNQWIY3sUT3WU=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-OjzbMxdeSYA7yAiE0/vXZxTVBKA15yk9lq3GzFFQ0sU=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1028,7 +1028,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.17.0';
+const APP_VERSION = '10.18.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -2269,7 +2269,8 @@ function renderFolders(box) {
         T.list().forEach((t) => { if (t.driveId) t.folderChecked = false; });
         const n = await DRIVE.repairFolders((dirs, files) => { rb.textContent = `Reading Drive… ${dirs} folders, ${files} tracks`; });
         const r = DRIVE.lastRepair || {};
-        toast(n ? `${n} track${n === 1 ? '' : 's'} filed from Drive (${r.folders} folders read)`
+        toast(n ? `${n} track${n === 1 ? '' : 's'} filed from Drive` +
+            (r.unknown ? `, ${r.unknown} not found in Drive` : '')
           : `Read ${r.folders || 0} folders from Drive — nothing to change`);
         render();
         return;
@@ -9279,6 +9280,7 @@ const DRIVE = (() => {
     const root = await findFolder();
     if (!root) throw new Error(`No folder called “${folderName()}” in your Drive`);
     const byId = new Map();                 /* drive file id -> folder path */
+    const byNameSize = new Map(), byName = new Map();
     const paths = [];                       /* every folder path, for name fallback */
     const queue = [{ id: root.id, path: '' }];
     const seen = new Set();
@@ -9290,7 +9292,7 @@ const DRIVE = (() => {
       let pageToken = '';
       do {
         const q = `'${dir.id}' in parents and trashed=false`;
-        const d = await api(`/files?q=${encodeURIComponent(q)}&fields=nextPageToken,files(id,name,mimeType)` +
+        const d = await api(`/files?q=${encodeURIComponent(q)}&fields=nextPageToken,files(id,name,size,mimeType)` +
           `&pageSize=1000&orderBy=folder,name${pageToken ? '&pageToken=' + pageToken : ''}`);
         (d.files || []).forEach((f) => {
           if (f.mimeType === FOLDER_MIME2) {
@@ -9299,6 +9301,11 @@ const DRIVE = (() => {
             if (p.split('/').length < 8) queue.push({ id: f.id, path: p });
           } else if (AUD.test(f.name) || (f.mimeType || '').startsWith('audio/')) {
             byId.set(f.id, dir.path);
+            /* a track that came off a computer has no Drive id, but the same
+               file is up here: its name and byte size identify it exactly */
+            const push = (m, k) => { if (!m.has(k)) m.set(k, []); m.get(k).push(dir.path); };
+            push(byNameSize, f.name + '|' + (+f.size || 0));
+            push(byName, f.name);
             files++;
           }
         });
@@ -9307,7 +9314,7 @@ const DRIVE = (() => {
       if (onProgress) onProgress(seen.size, files, queue.length);
       if (seen.size > 600) break;
     }
-    return { byId, paths };
+    return { byId, byNameSize, byName, paths };
   }
 
   let repairing = null;
@@ -9319,32 +9326,33 @@ const DRIVE = (() => {
     return repairing;
   }
   async function doRepair(onProgress) {
-    const { byId, paths } = await driveIndex(onProgress);
+    const { byId, byNameSize, byName, paths } = await driveIndex(onProgress);
     let fixed = 0, unknown = 0, ambiguous = 0;
-    /* exact, by the file's own id */
     for (const t of T.list()) {
-      if (!t.driveId) continue;
-      if (!byId.has(t.driveId)) { unknown++; continue; }
-      const p = byId.get(t.driveId);
-      if ((t.folder || '') !== p) { t.folder = p; await T.save(t); fixed++; }
-      t.folderChecked = true;
-    }
-    /* anything imported from the phone can only be matched by name, and only
-       when that name exists in exactly one place */
-    const byLeaf = new Map();
-    paths.forEach((p) => {
-      const leaf = p.split('/').pop();
-      if (!byLeaf.has(leaf)) byLeaf.set(leaf, []);
-      byLeaf.get(leaf).push(p);
-    });
-    for (const t of T.list()) {
-      if (t.driveId) continue;
       const cur = (t.folder || '').trim();
-      if (!cur || cur.indexOf('/') >= 0) continue;
-      const hits = byLeaf.get(cur);
-      if (!hits) continue;
-      if (hits.length > 1) { ambiguous++; continue; }
-      if (hits[0] !== cur) { t.folder = hits[0]; await T.save(t); fixed++; }
+      let p = null;
+
+      /* 1. a cloud track: its own Drive id says exactly where it lives */
+      if (t.driveId && byId.has(t.driveId)) p = byId.get(t.driveId);
+
+      /* 2. otherwise the same file by name and size — an album ripped to your
+            computer and uploaded here is byte-for-byte the same file */
+      if (p === null) {
+        let hits = byNameSize.get((t.fileName || '') + '|' + (+t.size || 0))
+                || byName.get(t.fileName || '') || [];
+        /* the same name in several albums: keep the one whose folder is the
+           one the track already claims to be in */
+        if (hits.length > 1 && cur) {
+          const narrowed = hits.filter((x) => x.split('/').pop() === cur || x === cur);
+          if (narrowed.length) hits = narrowed;
+        }
+        if (hits.length === 1) p = hits[0];
+        else if (hits.length > 1) { ambiguous++; continue; }
+        else { unknown++; continue; }
+      }
+
+      if (p !== null && cur !== p) { t.folder = p; await T.save(t); fixed++; }
+      if (t.driveId) t.folderChecked = true;
     }
     lastRepair = { fixed, unknown, ambiguous, folders: paths.length, files: byId.size };
     render();
