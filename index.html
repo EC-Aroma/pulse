@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-8STasH2ZKqnaIIMpFTwwQBNKHVAdVQnwE6f7KjZHtmM=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-vc2rGv5tPRQ3AjyGNGr3ycWH0GPT7+GfSn+IeyObO/g=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-y4efxmvx3TMgVmBvUTYvme1NwPZLICaVs9hUAvA2lUo=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-g11R/Fx8USVhhfvQ20g89gdgPJF4JL86210ii1OdOPE=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1028,7 +1028,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.15.0';
+const APP_VERSION = '10.16.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -2214,7 +2214,7 @@ function renderFolders(box) {
     </div>${path ? `<div class="card muted" style="margin-top:8px">${below.length} track${below.length === 1 ? '' : 's'} in <b>${esc(FOLDERS.leaf(path))}</b>${kids.length ? ' · ' + kids.length + ' folder' + (kids.length === 1 ? '' : 's') + ' inside' : ''}</div>`
       : `<div class="card muted" style="margin-top:8px">${flat} of your ${T.list().length} track${T.list().length === 1 ? '' : 's'} ${flat === 1 ? 'has' : 'have'} no parent folder recorded${flat ? ' — they show up here as loose folders' : ''}. Pulse ${APP_VERSION}.</div>
         <p class="hint" style="padding:0">A track lives in one folder, and a folder can sit inside another. Music imported from your phone or from Drive keeps the shape it already had.<br><br>
-        ${flat ? `<b>Imported before ${'10.12'} ?</b> Those tracks only ever recorded the last folder they were in, so a discography arrives as loose year folders with no parent. Tap <b>Rebuild from a folder on my phone</b> and pick the top folder again — the discography folder itself, not a year inside it. Nothing is imported twice; everything is simply filed where it belongs.`
+        ${flat ? `<b>Folders showing without their parent?</b> Tap <b>Rebuild the folder tree</b>. Pulse reads the folder structure straight out of your Google Drive and puts every one of them back under the folder it belongs to. It takes a few seconds and touches nothing else.`
           : 'Deleting a folder never deletes music.'}</p>`}</div>`;
 
   const folderRows = kids.map((k) => {
@@ -2267,8 +2267,10 @@ function renderFolders(box) {
       rb.textContent = 'Asking Drive…';
       try {
         T.list().forEach((t) => { if (t.driveId) t.folderChecked = false; });
-        const n = await DRIVE.repairFolders((done, total) => { rb.textContent = `Checking ${done} of ${total}…`; });
-        toast(n ? `${n} track${n === 1 ? '' : 's'} put back under the right folder` : 'Cloud tracks were already filed correctly');
+        const n = await DRIVE.repairFolders((found) => { rb.textContent = `Reading Drive… ${found} folders`; });
+        const r = DRIVE.lastRepair || {};
+        toast(n ? `${n} track${n === 1 ? '' : 's'} moved under their parent folder`
+          : `Read ${r.folders || 0} folders from Drive — nothing to change`);
         render();
         return;
       } catch (e) { toast('Could not reach Drive — ' + ((e && e.message) || e)); rb.textContent = 'Rebuild the folder tree'; }
@@ -9266,51 +9268,68 @@ const DRIVE = (() => {
     return out;
   }
 
-  /* ---------- repair the folder tree from Drive itself ----------
-     Every cloud track remembers its Drive file id, and Drive can say which
-     folder a file is in and which folder that one is in. So the whole tree can
-     be rebuilt from what is already in the library — no re-listing, no
-     re-adding, nothing for you to pick. */
-  const dirCache = new Map();
-  async function dirInfo(id) {
-    if (dirCache.has(id)) return dirCache.get(id);
-    const d = await api(`/files/${id}?fields=id,name,parents`);
-    const info = { name: d.name || '', parent: (d.parents || [])[0] || null };
-    dirCache.set(id, info);
-    return info;
-  }
-  async function pathOf(fileId, rootId) {
-    const d = await api(`/files/${fileId}?fields=parents`);
-    let p = (d.parents || [])[0] || null;
-    const parts = [];
-    for (let i = 0; i < 8 && p && p !== rootId; i++) {
-      const info = await dirInfo(p);
-      if (!info || !info.name) break;
-      parts.unshift(info.name);
-      p = info.parent;
+  /* ---------- rebuild the folder tree from Drive ----------
+     Ask Drive for its FOLDERS only — a handful of requests, no matter how
+     many tracks you own — and build the full path of every folder under your
+     Pulse music folder. A track filed as "1975 - High Voltage" then simply
+     becomes "AC-DC - Discography 1975-2020 (FLAC) 88/1975 - High Voltage".
+     Doing this per track meant one request per file, which for a library of
+     nine hundred was hopeless; this is the same answer in ten. */
+  const FOLDER_Q = "mimeType='application/vnd.google-apps.folder' and trashed=false";
+  async function folderTree(onProgress) {
+    const root = await findFolder();
+    if (!root) throw new Error(`No folder called “${folderName()}” in your Drive`);
+    const paths = [];                       /* every folder path under the root */
+    const queue = [{ id: root.id, path: '' }];
+    const seen = new Set();
+    while (queue.length) {
+      const dir = queue.shift();
+      if (seen.has(dir.id)) continue;
+      seen.add(dir.id);
+      let pageToken = '';
+      do {
+        const q = `'${dir.id}' in parents and ${FOLDER_Q}`;
+        const d = await api(`/files?q=${encodeURIComponent(q)}&fields=nextPageToken,files(id,name)` +
+          `&pageSize=200&orderBy=name${pageToken ? '&pageToken=' + pageToken : ''}`);
+        (d.files || []).forEach((f) => {
+          const p = (dir.path ? dir.path + '/' : '') + f.name;
+          paths.push(p);
+          if (p.split('/').length < 7) queue.push({ id: f.id, path: p });
+        });
+        pageToken = d.nextPageToken || '';
+      } while (pageToken);
+      if (onProgress) onProgress(paths.length, seen.size);
+      if (seen.size > 400) break;
     }
-    return parts.join('/');           /* '' means it sits in your Drive folder */
+    return paths;
   }
+
+  /* Match on the folder name a track already carries. A name that appears in
+     two different places is left alone rather than guessed at. */
   async function repairFolders(onProgress) {
-    const list = T.list().filter((t) => t.driveId && !t.folderChecked);
-    if (!list.length) return 0;
-    const folder = await findFolder();
-    if (!folder) throw new Error(`No folder called “${folderName()}” in your Drive`);
-    let fixed = 0;
-    for (let i = 0; i < list.length; i++) {
-      const t = list[i];
-      try {
-        const p = await pathOf(t.driveId, folder.id);
-        if ((t.folder || '') !== p) { t.folder = p; fixed++; }
-        t.folderChecked = true;
-        await T.save(t);
-      } catch (e) { /* one awkward file must not stop the rest */ }
-      if (onProgress) onProgress(i + 1, list.length, fixed);
+    const paths = await folderTree(onProgress);
+    const byLeaf = new Map();
+    paths.forEach((p) => {
+      const leaf = p.split('/').pop();
+      if (!byLeaf.has(leaf)) byLeaf.set(leaf, []);
+      byLeaf.get(leaf).push(p);
+    });
+    let fixed = 0, ambiguous = 0;
+    for (const t of T.list()) {
+      const cur = (t.folder || '').trim();
+      if (!cur || cur.indexOf('/') >= 0) continue;      /* already a full path */
+      const hits = byLeaf.get(cur);
+      if (!hits) continue;
+      if (hits.length > 1) { ambiguous++; continue; }
+      if (hits[0] !== cur) { t.folder = hits[0]; await T.save(t); fixed++; }
     }
+    T.list().forEach((t) => { if (t.driveId) t.folderChecked = true; });
+    lastRepair = { fixed, ambiguous, folders: paths.length };
     render();
     return fixed;
   }
-  const needsRepair = () => T.list().filter((t) => t.driveId && !t.folderChecked).length;
+  let lastRepair = null;
+  const needsRepair = () => T.list().filter((t) => (t.folder || '') && t.folder.indexOf('/') < 0).length;
 
   async function download(f) {
     const t = await auth(false);
@@ -9466,9 +9485,7 @@ const DRIVE = (() => {
         const fx2 = $('drvRefile');
         if (fx2) fx2.onclick = async () => {
           T.list().forEach((t) => { if (t.driveId) t.folderChecked = false; });
-          const n = await repairFolders((done, total) => {
-            fx2.textContent = `Checking ${done} of ${total}…`;
-          });
+          const n = await repairFolders((found) => { fx2.textContent = `Reading Drive… ${found} folders`; });
           fx2.textContent = 'Fix folders on tracks I already added';
           toast(n ? `${n} track${n === 1 ? '' : 's'} put in the right folder` : 'Everything was already filed correctly');
           render();
@@ -9497,7 +9514,7 @@ const DRIVE = (() => {
     );
   }
 
-  return { open, listTracks, download, addStream, shareToken, ensureStreamReady, check, explain, autoConnect, quietRenew, repairFolders, needsRepair };
+  return { open, listTracks, download, addStream, shareToken, ensureStreamReady, check, explain, autoConnect, quietRenew, repairFolders, needsRepair, get lastRepair() { return lastRepair; } };
 })();
 window.DRIVE = DRIVE;
 
