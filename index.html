@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-7BjXrnk8WpvX/7RDOZsxmBCj9Y1B74+YW+9j26OH0Vw=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-AQklb2XSm6wOkcUumkD1eDUZeTamAisPyYotJSg9UVc=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-ab/y6+2i5gwcXDQp9cIbiuF1diUFcTZErX2IJ60658s=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-AQklb2XSm6wOkcUumkD1eDUZeTamAisPyYotJSg9UVc=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -576,6 +576,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
         <button data-tab="genres">Genres</button>
         <button data-tab="folders">Folders</button>
         <button data-tab="favorites">Favorites</button>
+        <button data-tab="offline">Offline</button>
       </nav>
       <div class="sortrow" id="sortRow">
         <label>Sort</label>
@@ -1094,7 +1095,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.21.0';
+const APP_VERSION = '10.22.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -1991,6 +1992,10 @@ const DOWNLOADS = {
   list() {
     return T.list().filter((t) => t.hasBlob && (t.driveId || t.streamUrl || t.downloadedAt));
   },
+  /* wider: anything with a copy on the phone, imports included — this is the
+     honest answer to "what still plays when the gym wifi dies" */
+  offline() { return T.list().filter((t) => t.hasBlob); },
+  offlineBytes() { return this.offline().reduce((n, t) => n + (+t.size || 0), 0); },
   bytes() { return this.list().reduce((n, t) => n + (+t.size || 0), 0); },
   open() {
     const ts = sortedTracks(this.list(), 'folder');
@@ -2248,13 +2253,21 @@ function renderLibrary() {
   const box = $('libList');
   const all = T.list().filter((t) => matches(t, S.search));
   els('#libTabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === S.tab));
-  $('sortRow').classList.toggle('hidden', !['songs', 'favorites'].includes(S.tab));
+  $('sortRow').classList.toggle('hidden', !['songs', 'favorites', 'offline'].includes(S.tab));
 
   if (!T.list().length) {
     box.innerHTML = `<div class="empty"><b>Your library is empty</b>Tap the ↑ button top-right to import music from your phone. MP3, M4A, FLAC, OGG and WAV all work, and tags (artist, album, genre, artwork, BPM) are read automatically.</div>`;
     return;
   }
-  if (S.tab === 'songs' || S.tab === 'favorites') {
+  if (S.tab === 'offline') {
+    const list = sortedTracks(DOWNLOADS.offline().filter((t) => matches(t, S.search)));
+    const dl = DOWNLOADS.list().length;
+    box.innerHTML = list.length
+      ? `<div class="pad" style="padding-bottom:6px"><div class="card muted">${list.length} track${list.length === 1 ? '' : 's'} play with no signal at all · ${fmtBytes(DOWNLOADS.offlineBytes())} on the phone${dl ? ` · ${dl} pulled down from the cloud` : ''}</div></div>`
+        + list.map((t) => rowHTML(t)).join('')
+      : `<div class="empty"><b>Nothing stored on the phone yet</b>Tap ⋯ on a cloud track and choose <b>Download for offline use</b>, or open a folder and use <b>Download it all for offline</b>. Anything imported from your phone is already here.</div>`;
+    hydrateArt(box);
+  } else if (S.tab === 'songs' || S.tab === 'favorites') {
     let list = S.tab === 'favorites' ? all.filter((t) => t.fav) : all;
     list = sortedTracks(list);
     box.innerHTML = list.length ? list.map((t) => rowHTML(t)).join('')
