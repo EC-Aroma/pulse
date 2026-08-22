@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-PYVw7gQKC1VT5wPLO4J9MmvmQEgW/dv2zVSX5KseucI=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-AQklb2XSm6wOkcUumkD1eDUZeTamAisPyYotJSg9UVc=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-UO8C3S6wT+duaKnDYrLWVJqjtjMEeuwpoJJ1l6C3DsA=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-IcH0udv5K/lpTADIsrgY4EoZsHNc9Z9XN1o5wlGzajc=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1114,7 +1114,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.24.1';
+const APP_VERSION = '10.25.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -9821,12 +9821,17 @@ const DRIVE = (() => {
      service worker, which fetches from Drive on demand. Saving it offline
      later goes through the very same URL, so nothing special is needed. */
   let refiled = 0;                 /* tracks whose folder was corrected this run */
-  async function addStream(f) {
-    const existing = T.list().find((t) => t.driveId === f.id);
+  /* Adding hundreds at once used to redraw the whole library after every
+     single track — nine hundred full re-renders, which looks exactly like an
+     app that has hung, and is why adding them one by one felt like the only
+     option. In bulk we touch the screen once, at the end. */
+  async function addStream(f, bulk) {
+    const known = bulk ? bulkIndex : null;
+    const existing = known ? known.get(f.id) : T.list().find((t) => t.driveId === f.id);
     if (existing) {
       /* already here — but its folder may have moved in Drive since */
       const want = f.folderName || '';
-      if ((existing.folder || '') !== want) { existing.folder = want; await T.save(existing); refiled++; render(); }
+      if ((existing.folder || '') !== want) { existing.folder = want; await T.save(existing); refiled++; if (!bulk) render(); }
       return existing.id;
     }
     const id = uid();
@@ -9845,21 +9850,38 @@ const DRIVE = (() => {
       driveId: f.id, hasBlob: false, sourceUrl: ''
     };
     S.tracks.set(id, track);
+    if (bulkIndex) bulkIndex.set(f.id, track);
     await DB.put('tracks', track);
-    render();
+    if (!bulk) render();
     return id;
   }
+  let bulkIndex = null;
 
-  async function addAllStreams(files) {
+  async function addAllStreams(files, label) {
     const before = T.list().length;
     refiled = 0;
-    for (const f of files) await addStream(f);
+    /* one pass over the library up front, then a lookup per file instead of a
+       search through everything */
+    bulkIndex = new Map();
+    T.list().forEach((t) => { if (t.driveId) bulkIndex.set(t.driveId, t); });
+    const btn = $('drvAllStream');
+    const was = btn ? btn.textContent : '';
+    for (let i = 0; i < files.length; i++) {
+      await addStream(files[i], true);
+      if (btn && (i % 20 === 0 || i === files.length - 1)) {
+        btn.textContent = `Adding ${i + 1} of ${files.length}…`;
+        await new Promise((r) => setTimeout(r, 0));     /* let the screen breathe */
+      }
+    }
+    bulkIndex = null;
+    if (btn) btn.textContent = was;
     const added = T.list().length - before;
     /* Adding the same folder twice is how you repair a library filed by an
        older version, so say what actually happened rather than a bare count. */
     toast(added
-      ? `${added} added — playing from Drive, nothing stored` + (refiled ? `, ${refiled} refiled` : '')
-      : (refiled ? `${refiled} track${refiled === 1 ? '' : 's'} put in the right folder` : 'Already in your library'));
+      ? `${added} track${added === 1 ? '' : 's'} added${label ? ' from ' + label : ''} — playing from Drive, nothing stored on the phone`
+        + (refiled ? `, ${refiled} refiled` : '')
+      : (refiled ? `${refiled} track${refiled === 1 ? '' : 's'} put in the right folder` : 'All of them were already in your library'));
     render();
   }
 
@@ -9919,11 +9941,13 @@ const DRIVE = (() => {
         $('drvList').innerHTML = `<div class="pad"><div class="card muted">${files.length} track${files.length > 1 ? 's' : ''} · ${(total / 1e9).toFixed(2)} GB` +
           `${subs > 1 ? ' · across ' + subs + ' folders' : ''}</div>
             <div class="row-btns" style="padding:0">
-              <button class="primary" id="drvAllStream">Add all — play from Drive</button>
+              <button class="primary big" id="drvAllStream" style="flex:1 1 100%">Add all ${files.length} tracks to my library</button>
+            </div>
+            <div class="row-btns" style="padding:0;margin-top:8px">
               <button class="ghost" id="drvAll">Download all for offline</button>
               <button class="ghost" id="drvRefile">Fix folders on tracks I already added</button>
             </div>
-            <p class="hint" style="padding:0;margin-top:8px">Everything inside “${esc(folderName())}” is listed, sub-folders included &mdash; and each track keeps its folder when it lands in your library. Tap a track to add it as a <b>cloud track</b> &mdash; it plays straight from Drive and uses no space on the phone, but needs a connection. Tap <b>&darr;</b> to keep a copy for the gym instead.</p></div>` +
+            <p class="hint" style="padding:0;margin-top:8px"><b>One tap is enough</b> — the button above adds the whole folder at once; there is no need to tap tracks individually. Everything inside “${esc(folderName())}” is listed, sub-folders included &mdash; and each track keeps its folder when it lands in your library. Tap a track to add it as a <b>cloud track</b> &mdash; it plays straight from Drive and uses no space on the phone, but needs a connection. Tap <b>&darr;</b> to keep a copy for the gym instead.</p></div>` +
           [...byFolder.entries()].map(([name, idx]) => {
             const gb = idx.reduce((a, i) => a + (+files[i].size || 0), 0);
             return (subs > 1 ? `<div class="row group" style="pointer-events:none">
@@ -9939,7 +9963,7 @@ const DRIVE = (() => {
         els('#drvList [data-drvfolder]').forEach((n) => n.onclick = async (ev) => {
           ev.stopPropagation();
           const name = n.dataset.drvfolder;
-          await addAllStreams(files.filter((f) => (f.folderName || '') === name));
+          await addAllStreams(files.filter((f) => (f.folderName || '') === name), name || folderName());
         });
         const grab = async (list) => {
           let n = 0;
@@ -9959,7 +9983,7 @@ const DRIVE = (() => {
           ev.stopPropagation();
           grab([files[+n.dataset.drvdl]]);
         });
-        $('drvAllStream').onclick = () => addAllStreams(files);
+        $('drvAllStream').onclick = () => addAllStreams(files, folderName());
         const fx2 = $('drvRefile');
         if (fx2) fx2.onclick = async () => {
           T.list().forEach((t) => { if (t.driveId) t.folderChecked = false; });
@@ -9992,7 +10016,7 @@ const DRIVE = (() => {
     );
   }
 
-  return { open, listTracks, download, addStream, shareToken, ensureStreamReady, check, explain, autoConnect, quietRenew, repairFolders, needsRepair, get lastRepair() { return lastRepair; } };
+  return { open, listTracks, download, addStream, addAllStreams, shareToken, ensureStreamReady, check, explain, autoConnect, quietRenew, repairFolders, needsRepair, get lastRepair() { return lastRepair; } };
 })();
 window.DRIVE = DRIVE;
 
