@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-7krQo1cJfIkJdT1j30+NBf33PUoQ8N/M04MxY0/lbPM=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-OjzbMxdeSYA7yAiE0/vXZxTVBKA15yk9lq3GzFFQ0sU=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-7BjXrnk8WpvX/7RDOZsxmBCj9Y1B74+YW+9j26OH0Vw=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-AQklb2XSm6wOkcUumkD1eDUZeTamAisPyYotJSg9UVc=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -520,6 +520,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
 #npTimer.on{color:var(--a1)}
 .tm-chips{display:flex;flex-wrap:wrap;gap:8px}
 .tm-chips .chip{flex:1 1 auto;min-width:88px;text-align:center;padding:12px 10px}
+.off-badge{background:#123024;border:1px solid #1f6b47;color:#4fe0a0;border-radius:6px;padding:2px 6px;font-size:11px}
 
 </style>
 </head>
@@ -1093,7 +1094,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.20.0';
+const APP_VERSION = '10.21.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -1983,6 +1984,21 @@ function groupBy(list, key) {
   });
   return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: 'base' }));
 }
+/* Downloaded music: a track that arrived from Drive or a link and now has a
+   real copy stored on the phone. It keeps its own folder — this is a view of
+   them, not a move — so the tree stays exactly as it is in Drive. */
+const DOWNLOADS = {
+  list() {
+    return T.list().filter((t) => t.hasBlob && (t.driveId || t.streamUrl || t.downloadedAt));
+  },
+  bytes() { return this.list().reduce((n, t) => n + (+t.size || 0), 0); },
+  open() {
+    const ts = sortedTracks(this.list(), 'folder');
+    if (!ts.length) { toast('Nothing downloaded yet — tap ⋯ on a cloud track and choose Download'); return; }
+    openList('Downloaded music', ts, { showAlbum: true });
+  }
+};
+
 /* ---------- folders ----------
    A folder is simply a name written on a track, which means nothing can get
    lost: delete a folder and its music is still in the library, exactly where
@@ -2207,7 +2223,7 @@ function rowHTML(t, opts = {}) {
   return `<div class="row track ${P.queue[P.qi] === t.id ? 'playing' : ''}" data-id="${t.id}">
     <div class="art sm" data-art="${t.artId || ''}"></div>
     <div class="r-meta"><div class="r-title">${esc(t.title)}</div><div class="r-sub">${bits.join(' · ')}</div></div>
-    <div class="r-right">${t.fav ? '<span class="r-fav">♥</span>' : ''}${t.hasVideo ? '<span class="vid-badge">video</span>' : ''}${streamOnly ? '<span class="stream-badge">stream</span>' : ''}${t.energy ? `<span class="tagpill">E${t.energy}</span>` : ''}<span>${t.duration ? fmtTime(t.duration) : '—'}</span></div>
+    <div class="r-right">${t.fav ? '<span class="r-fav">♥</span>' : ''}${t.hasVideo ? '<span class="vid-badge">video</span>' : ''}${streamOnly ? '<span class="stream-badge">stream</span>' : ''}${t.hasBlob && (t.driveId || t.streamUrl || t.downloadedAt) ? '<span class="off-badge">offline</span>' : ''}${t.energy ? `<span class="tagpill">E${t.energy}</span>` : ''}<span>${t.duration ? fmtTime(t.duration) : '—'}</span></div>
     <button class="r-more" data-more="${t.id}">⋯</button>
   </div>`;
 }
@@ -2282,6 +2298,14 @@ function renderFolders(box) {
         ${flat ? `<b>Folders showing without their parent?</b> Tap <b>Rebuild the folder tree</b>. Pulse reads the folder structure straight out of your Google Drive and puts every one of them back under the folder it belongs to. It takes a few seconds and touches nothing else.`
           : 'Deleting a folder never deletes music.'}</p>`}</div>`;
 
+  /* pinned at the very top: everything that plays with no signal at all */
+  const dl = DOWNLOADS.list();
+  const dlRow = (!path && dl.length) ? `<div class="row group" id="dlRow">
+      <div class="art sm folder-art">⬇</div>
+      <div class="r-meta"><div class="r-title">Downloaded music</div>
+        <div class="r-sub">${dl.length} track${dl.length === 1 ? '' : 's'} · ${fmtBytes(DOWNLOADS.bytes())} on the phone · works with no signal</div></div>
+      <div class="r-right">›</div></div>` : '';
+
   const folderRows = kids.map((k) => {
     const full = path ? path + '/' + k : k;
     const n = FOLDERS.allTracks(full).length;
@@ -2299,11 +2323,13 @@ function renderFolders(box) {
     ? (here.length ? `<div class="pad muted" style="padding-bottom:4px">Tracks in this folder</div>` : '')
     : (loose.length ? `<div class="pad muted" style="padding-bottom:4px">Not in a folder</div>` : '');
 
-  box.innerHTML = head + folderRows + label + trackRows +
+  box.innerHTML = head + dlRow + folderRows + label + trackRows +
     (!kids.length && !(path ? here.length : loose.length)
       ? `<div class="empty"><b>Nothing in here yet</b>Use <b>+ New folder here</b>, or put tracks in from the ⋯ menu on any song.</div>` : '');
   hydrateArt(box);
 
+  const dlr = $('dlRow');
+  if (dlr) dlr.onclick = () => DOWNLOADS.open();
   els('[data-fold]', box).forEach((n) => n.onclick = (ev) => {
     if (ev.target.closest('[data-foldmore]')) return;
     S.folderPath = n.dataset.fold; render(); window.scrollTo(0, 0);
@@ -2352,6 +2378,15 @@ function folderMenu(path) {
     { label: 'Open', run: () => { S.folderPath = path; S.tab = 'folders'; render(); } },
     { label: 'Play everything in it', run: () => { const ids = sortedTracks(FOLDERS.allTracks(path), 'folder').map((t) => t.id); if (!ids.length) { toast('Nothing in there yet'); return; } playQueue(ids, 0, name); openSheet('np'); } },
     { label: 'Add or remove music…', run: () => FOLDERS.choose(path) },
+    { label: 'Download it all for offline', run: async () => {
+      const cloud = FOLDERS.allTracks(path).filter((t) => !t.hasBlob && t.streamUrl);
+      if (!cloud.length) { toast('Everything in here is already on the phone'); return; }
+      if (!confirm(`Download ${cloud.length} track${cloud.length === 1 ? '' : 's'} to the phone? They will play with no signal at all.`)) return;
+      let n = 0;
+      for (const t of cloud) { toast(`Downloading ${++n} of ${cloud.length}…`); await OPS.saveOffline(t.id); }
+      toast(`${name}: ${n} now on the phone`);
+      render();
+    } },
     { label: 'Rename…', run: async () => {
       const n = prompt('Folder name', name); if (!n || !n.trim()) return;
       const to = await FOLDERS.rename(path, n);
@@ -7184,10 +7219,11 @@ ${JSON.stringify(r, null, 2)}`;
       if (!blob.size) throw new Error('empty file');
       await DB.put('audio', blob, id);
       t.hasBlob = true; t.size = blob.size; t.mime = blob.type || '';
+      t.downloadedAt = Date.now();          /* it now lives on the phone */
       P.urls.delete(id);
       await T.save(t);
       render();
-      toast('Saved for offline — ' + fmtBytes(blob.size));
+      toast('Saved on the phone (' + fmtBytes(blob.size) + ') — Library, Folders, Downloaded music');
     } catch (e) {
       toast("That server won't allow downloading from an app (CORS). It will still stream online.");
     }
