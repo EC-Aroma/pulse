@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-ab/y6+2i5gwcXDQp9cIbiuF1diUFcTZErX2IJ60658s=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-AQklb2XSm6wOkcUumkD1eDUZeTamAisPyYotJSg9UVc=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-tu878eHuhmjB0rA5m0jTGNGSDJPLYnp8xcUL9e/8PWk=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-AQklb2XSm6wOkcUumkD1eDUZeTamAisPyYotJSg9UVc=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -737,6 +737,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
             <button class="primary" id="btnCloud">Cloud library (my GitHub folder)</button>
             <button class="primary" id="btnDrive">Google Drive folder</button>
             <button class="ghost" id="btnCloudCheck">Cloud check &mdash; why won't it play?</button>
+            <button class="ghost" id="btnInvite">Invite someone to Pulse</button>
           </div>
           <p class="hint" id="videoHint">Pick a video file (mp4, mov, webm&hellip;) and Pulse keeps just the soundtrack, re-compressed small. Nothing is uploaded &mdash; the conversion happens on your phone.<br><br>
           <b>From TikTok, X or Instagram:</b> use that app's own <b>Save video</b> button to put the file on your phone, then share it into Pulse from the Android share sheet — Pulse keeps the soundtrack and drops the picture. Paste one of their links here and Pulse tells you exactly which button to press.<br><br>
@@ -1095,7 +1096,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.22.0';
+const APP_VERSION = '10.23.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -1985,6 +1986,47 @@ function groupBy(list, key) {
   });
   return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: 'base' }));
 }
+/* Inviting someone else.
+   Pulse is a web app, so there is no account and nothing to provision: the
+   link IS the app. What the other person needs beyond that is the two lines
+   of setup that connect their phone to the music, which this writes out for
+   them so nothing has to be dictated over the phone. */
+function invitePulse() {
+  const link = 'https://ec-aroma.github.io/pulse/';
+  const cid = (S.settings.driveClientId || '').trim();
+  const folder = (S.settings.driveFolder || 'Pulse music').trim();
+  const msg = `Pulse — my music and gym player. It is free and there is no account.
+
+1. Open this on your phone in Chrome: ${link}
+2. Chrome menu (⋮) → Add to Home screen. It then works like a normal app, offline too.
+3. Your library starts empty — your music, your playlists, your settings stay on your phone.
+` + (cid ? `
+To play from our shared Google Drive folder:
+4. In Pulse: Settings → App → Google Drive folder
+5. Folder name: ${folder}
+6. Paste this client ID: ${cid}
+7. Press Connect & list music, sign in with the Google account I shared the folder with.
+` : '');
+
+  actionSheet('Invite someone to Pulse', [
+    { label: 'Send the instructions…', run: async () => {
+      try {
+        if (navigator.share) { await navigator.share({ title: 'Pulse', text: msg }); return; }
+        await navigator.clipboard.writeText(msg);
+        toast('Copied — paste it into WhatsApp');
+      } catch (e) { OPS.showLog(msg); }
+    } },
+    { label: 'Send just the link', run: async () => {
+      try {
+        if (navigator.share) { await navigator.share({ title: 'Pulse', text: 'Pulse — my music player: ' + link, url: link }); return; }
+        await navigator.clipboard.writeText(link);
+        toast('Link copied');
+      } catch (e) { OPS.showLog(link); }
+    } },
+    { label: 'Show it on screen', run: () => OPS.showLog(msg) }
+  ]);
+}
+
 /* Downloaded music: a track that arrived from Drive or a link and now has a
    real copy stored on the phone. It keeps its own folder — this is a view of
    them, not a move — so the tree stays exactly as it is in Drive. */
@@ -3444,6 +3486,7 @@ function wire() {
   $('btnMeasure').onclick = () => MEASURE.open();
   $('btnDrive').onclick = () => DRIVE.open();
   $('btnCloudCheck').onclick = () => DRIVE.check();
+  $('btnInvite').onclick = () => invitePulse();
   $('btnSpeedTest').onclick = () => FX.selfTest();
   $('btnLastTest').onclick = () => {
     const t = S.settings.lastSelfTest;
