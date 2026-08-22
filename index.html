@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-ZTFISPg2X++EFIIJpAYn2ZOOGUmm/iZNQWIY3sUT3WU=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-OjzbMxdeSYA7yAiE0/vXZxTVBKA15yk9lq3GzFFQ0sU=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-B6gZl63WDewxt+bDFT13GM1AxxZA4AcDB2jFwhu6I9s=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-OjzbMxdeSYA7yAiE0/vXZxTVBKA15yk9lq3GzFFQ0sU=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -500,6 +500,21 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
 .crumbsep{color:var(--mut);font-size:13px}
 .art.sm.folder-art{display:grid;place-items:center;font-size:20px;background:var(--card)}
 
+/* ── countdown timer ── */
+.vf-timer{position:fixed;top:calc(var(--safe-t) + 14px);left:14px;z-index:60;
+  background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.18);border-radius:999px;
+  padding:8px 15px;font-size:17px;font-weight:700;font-variant-numeric:tabular-nums;color:#fff;
+  backdrop-filter:blur(8px)}
+.vf-timer.urgent{background:var(--a1);border-color:transparent;animation:tmpulse 1s ease-in-out infinite}
+@keyframes tmpulse{50%{transform:scale(1.09)}}
+.tm-readout{font-size:52px;font-weight:800;text-align:center;font-variant-numeric:tabular-nums;
+  letter-spacing:.02em;margin:8px 0 2px}
+.tm-state{text-align:center;margin-bottom:16px}
+.tm-set{display:flex;gap:10px;margin-bottom:14px}
+.tm-set label{flex:1;display:flex;flex-direction:column;gap:6px;font-size:12.5px;color:var(--mut)}
+.tm-set input{font-size:24px;text-align:center;font-variant-numeric:tabular-nums;padding:12px 4px}
+#npTimer.on{color:var(--a1)}
+
 </style>
 </head>
 <body>
@@ -807,6 +822,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
         <button class="icon-btn" id="npClose" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
         <div class="np-src" id="npSource">Now playing</div>
         <button class="icon-btn" id="npSound" aria-label="Sound settings"><svg viewBox="0 0 24 24"><path d="M5 8h14"/><path d="M5 16h14"/><circle cx="9" cy="8" r="2.2"/><circle cx="15" cy="16" r="2.2"/></svg></button>
+        <button class="icon-btn" id="npTimer" aria-label="Timer"><svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2"/><path d="M9 2h6"/></svg></button>
         <button class="icon-btn" id="npQueueBtn" aria-label="Queue"><svg viewBox="0 0 24 24"><path d="M4 7h12"/><path d="M4 12h12"/><path d="M4 17h8"/><path d="M18 12v7l3-1.5"/></svg></button>
       </div>
 
@@ -998,9 +1014,43 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
     <canvas id="vizSky" class="hidden"></canvas>
     <canvas id="vizBig"></canvas>
     <button class="icon-btn vf-x" id="vfClose" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    <button class="vf-timer hidden" id="vfTimer">00:00</button>
     <div class="vf-hint" id="vfHint">tap anywhere to leave</div>
     <div class="vf-meta" id="vfMeta"><div class="vf-title" id="vfTitle"></div><div class="vf-artist" id="vfArtist"></div></div>
   </section>
+
+  <!-- ── Countdown timer ────────────────────────────────────── -->
+  <div class="sheet" id="timerSheet">
+    <div class="sheet-head">
+      <button class="text-btn" id="tmClose">Close</button>
+      <b>Timer</b>
+      <button class="text-btn strong" id="tmReset">Reset</button>
+    </div>
+    <div class="sheet-body">
+      <div class="tm-readout" id="tmReadout">00:00:00</div>
+      <div class="tm-state muted" id="tmState">Set a time and press start</div>
+      <div class="tm-set" id="tmSet">
+        <label>Hours<input type="number" id="tmH" min="0" max="23" step="1" value="0" inputmode="numeric"></label>
+        <label>Minutes<input type="number" id="tmM" min="0" max="59" step="1" value="5" inputmode="numeric"></label>
+        <label>Seconds<input type="number" id="tmS" min="0" max="59" step="1" value="0" inputmode="numeric"></label>
+      </div>
+      <div class="row-btns" style="padding:0">
+        <button class="chip" data-tmadd="30">+30s</button>
+        <button class="chip" data-tmadd="60">+1 min</button>
+        <button class="chip" data-tmadd="300">+5 min</button>
+        <button class="chip" data-tmadd="600">+10 min</button>
+      </div>
+      <div class="row-btns" style="padding:0;margin-top:12px">
+        <button class="primary big" id="tmStart">Start</button>
+      </div>
+      <p class="hint" style="padding:0">It keeps counting with the screen off and while the music plays, and the
+      alarm is scheduled inside the audio engine, so it goes off on time even if Android has put the app to sleep.
+      Nothing leaves Pulse &mdash; you never have to switch to the phone's own timer, which is what was stopping
+      your music.</p>
+      <label class="switch"><input type="checkbox" id="tmDuck" checked><span>Dip the music while the alarm sounds</span></label>
+      <label class="switch"><input type="checkbox" id="tmRepeat"><span>Start again automatically when it finishes</span></label>
+    </div>
+  </div>
 
   <div id="toast" class="hidden"></div>
 
@@ -1028,7 +1078,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.18.0';
+const APP_VERSION = '10.19.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -2791,6 +2841,216 @@ function beep(freq = 880, ms = 120, vol = 0.25) {
     o.start(t0); o.stop(t0 + ms / 1000 + 0.02);
   } catch (e) {}
 }
+/* ============================================================
+   Countdown timer
+   Leaving Pulse to start the phone's own timer is what was killing playback:
+   Android suspends the browser and the music stops. So the timer lives here.
+
+   Two things make it dependable with the screen off. It counts against the
+   wall clock rather than counting ticks, so a throttled or skipped interval
+   changes nothing; and the alarm itself is a tone scheduled inside the audio
+   engine at the exact moment it is due, which the phone plays on the audio
+   thread whether or not JavaScript is awake.
+   ============================================================ */
+const TIMER = {
+  endAt: 0,          /* wall-clock moment it finishes */
+  left: 0,           /* seconds left while paused */
+  total: 0,
+  running: false,
+  iv: 0,
+  nodes: [],         /* scheduled alarm tones, so they can be cancelled */
+
+  async load() {
+    try {
+      const t = await DB.get('kv', 'timer');
+      if (!t) return;
+      this.total = t.total || 0;
+      if (t.running && t.endAt > Date.now()) { this.endAt = t.endAt; this.running = true; this.tick(); this.loop(); this.arm(); }
+      else if (!t.running && t.left > 0) { this.left = t.left; }
+      this.paint();
+    } catch (e) {}
+  },
+  save() {
+    try { DB.put('kv', { endAt: this.endAt, left: this.left, total: this.total, running: this.running }, 'timer'); } catch (e) {}
+  },
+
+  seconds() {
+    if (this.running) return Math.max(0, Math.round((this.endAt - Date.now()) / 1000));
+    return Math.max(0, Math.round(this.left));
+  },
+  fmt(s) {
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+    const p = (n) => String(n).padStart(2, '0');
+    return h ? `${h}:${p(m)}:${p(x)}` : `${p(m)}:${p(x)}`;
+  },
+
+  ctx() {
+    G.beepCtx = G.beepCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (G.beepCtx.state === 'suspended') G.beepCtx.resume();
+    return G.beepCtx;
+  },
+  /* Schedule the alarm now, for the moment it is due. Nothing here depends on
+     the app being awake later. */
+  arm() {
+    this.disarm();
+    const secs = (this.endAt - Date.now()) / 1000;
+    if (!this.running || secs <= 0) return;
+    let ac;
+    try { ac = this.ctx(); } catch (e) { return; }
+    const t0 = ac.currentTime + secs;
+    /* five rising pips — impossible to miss over music in a gym */
+    for (let i = 0; i < 5; i++) {
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.type = 'sine';
+      o.frequency.value = i < 4 ? 880 : 1320;
+      g.gain.value = 0;
+      o.connect(g); g.connect(ac.destination);
+      const at = t0 + i * 0.45;
+      g.gain.setValueAtTime(0, at);
+      g.gain.linearRampToValueAtTime(0.5, at + 0.02);
+      g.gain.linearRampToValueAtTime(0, at + (i < 4 ? 0.22 : 0.8));
+      o.start(at); o.stop(at + (i < 4 ? 0.3 : 0.9));
+      this.nodes.push(o);
+    }
+  },
+  disarm() {
+    this.nodes.forEach((n) => { try { n.stop(); } catch (e) {} try { n.disconnect(); } catch (e) {} });
+    this.nodes = [];
+  },
+
+  start(secs) {
+    const n = Math.max(1, Math.round(secs));
+    this.total = n;
+    this.endAt = Date.now() + n * 1000;
+    this.left = 0;
+    this.running = true;
+    this.save(); this.arm(); this.loop(); this.paint();
+    toast('Timer started — ' + this.fmt(n));
+    haptic();
+  },
+  pause() {
+    if (!this.running) return;
+    this.left = this.seconds();
+    this.running = false;
+    this.disarm(); this.stopLoop(); this.save(); this.paint();
+  },
+  resume() {
+    if (this.running || this.left <= 0) return;
+    this.endAt = Date.now() + this.left * 1000;
+    this.running = true;
+    this.left = 0;
+    this.save(); this.arm(); this.loop(); this.paint();
+  },
+  reset() {
+    this.running = false; this.left = 0; this.endAt = 0;
+    this.disarm(); this.stopLoop(); this.save(); this.paint();
+  },
+  addSeconds(n) {
+    if (this.running) { this.endAt += n * 1000; this.total += n; this.save(); this.arm(); }
+    else { this.left = Math.max(0, this.seconds() + n); this.total = Math.max(this.total, this.left); this.save(); }
+    this.paint();
+  },
+
+  loop() { this.stopLoop(); this.iv = setInterval(() => this.tick(), 250); },
+  stopLoop() { if (this.iv) clearInterval(this.iv); this.iv = 0; },
+  tick() {
+    if (this.running && Date.now() >= this.endAt) this.finish();
+    this.paint();
+  },
+
+  async finish() {
+    const wasTotal = this.total;
+    this.running = false; this.left = 0; this.stopLoop(); this.save();
+    this.disarm();                       /* the tones are already sounding */
+    try { if (navigator.vibrate) navigator.vibrate([400, 200, 400, 200, 700]); } catch (e) {}
+    if (S.settings.timerDuck !== false) {
+      const e = P.el();
+      const v = e.volume;
+      try { e.volume = clamp(v * 0.3, 0, 1); } catch (err) {}
+      setTimeout(() => { try { e.volume = v; } catch (err) {} }, 3200);
+    }
+    toast("Time's up");
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg && Notification.permission === 'granted') {
+        reg.showNotification("Time's up", { body: 'Pulse timer finished', icon: './icon-192.png', tag: 'pulse-timer', vibrate: [300, 150, 300] });
+      }
+    } catch (e) {}
+    this.paint();
+    if (S.settings.timerRepeat && wasTotal > 0) setTimeout(() => this.start(wasTotal), 1500);
+  },
+
+  paint() {
+    const s = this.seconds();
+    const txt = this.fmt(s);
+    const ro = $('tmReadout');
+    if (ro) ro.textContent = this.total || s ? (s >= 3600 ? txt : '00:' + txt).slice(-8) : '00:00:00';
+    const st = $('tmState');
+    if (st) st.textContent = this.running ? 'Running' : (s > 0 ? 'Paused' : 'Set a time and press start');
+    const btn = $('tmStart');
+    if (btn) btn.textContent = this.running ? 'Pause' : (s > 0 ? 'Resume' : 'Start');
+    const set = $('tmSet');
+    if (set) set.style.display = (this.running || s > 0) ? 'none' : '';
+    /* the chip on the full-screen visualiser */
+    const chip = $('vfTimer');
+    if (chip) {
+      const show = this.running || s > 0;
+      chip.classList.toggle('hidden', !show);
+      chip.textContent = txt;
+      chip.classList.toggle('urgent', show && s <= 10);
+    }
+    const np = $('npTimer');
+    if (np) np.classList.toggle('on', this.running);
+  },
+
+  open() {
+    openSheet('timerSheet');
+    const st = S.settings.timerLast || { h: 0, m: 5, s: 0 };
+    if (!this.running && this.seconds() === 0) {
+      $('tmH').value = st.h; $('tmM').value = st.m; $('tmS').value = st.s;
+    }
+    $('tmDuck').checked = S.settings.timerDuck !== false;
+    $('tmRepeat').checked = !!S.settings.timerRepeat;
+    this.paint();
+  },
+  fromInputs() {
+    const n = (id, max) => clamp(parseInt($(id).value, 10) || 0, 0, max);
+    const h = n('tmH', 23), m = n('tmM', 59), s = n('tmS', 59);
+    S.settings.timerLast = { h, m, s }; saveSettings();
+    return h * 3600 + m * 60 + s;
+  },
+  wire() {
+    const on = (id, fn) => { const e = $(id); if (e) e.onclick = fn; };
+    on('tmClose', () => closeSheet('timerSheet'));
+    on('tmReset', () => { this.reset(); toast('Timer cleared'); });
+    on('tmStart', () => {
+      if (this.running) { this.pause(); return; }
+      if (this.seconds() > 0) { this.resume(); return; }
+      const secs = this.fromInputs();
+      if (!secs) { toast('Set at least one second'); return; }
+      this.start(secs);
+    });
+    els('[data-tmadd]').forEach((b) => b.onclick = () => {
+      const n = +b.dataset.tmadd;
+      if (this.running || this.seconds() > 0) this.addSeconds(n);
+      else {
+        const cur = this.fromInputs() + n;
+        $('tmH').value = Math.floor(cur / 3600);
+        $('tmM').value = Math.floor((cur % 3600) / 60);
+        $('tmS').value = cur % 60;
+        this.fromInputs();
+      }
+    });
+    const d = $('tmDuck'); if (d) d.onchange = () => { S.settings.timerDuck = d.checked; saveSettings(); };
+    const r = $('tmRepeat'); if (r) r.onchange = () => { S.settings.timerRepeat = r.checked; saveSettings(); };
+    on('npTimer', () => this.open());
+    const chip = $('vfTimer');
+    if (chip) chip.onclick = (ev) => { ev.stopPropagation(); ev.preventDefault(); this.open(); };
+    /* coming back to the app: recompute from the clock, never from ticks */
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) this.tick(); });
+  }
+};
+
 let duckSaved = null;
 function duck(on) {
   if (!S.settings.duck) return;
@@ -3390,6 +3650,7 @@ async function boot() {
   } catch (e) {}
   try { await loadAll(); } catch (e) { console.warn('storage unavailable, running in memory', e); }
   try { await FOLDERS.load(); } catch (e) {}
+  try { TIMER.wire(); await TIMER.load(); } catch (e) {}
   /* once there are folders, sorting by title alone stacks every "01 …" from
      every set on top of each other — folder order is the tidy default */
   if (T.list().some((t) => t.folder)) S.sort = 'folder';
