@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-UO8C3S6wT+duaKnDYrLWVJqjtjMEeuwpoJJ1l6C3DsA=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-IcH0udv5K/lpTADIsrgY4EoZsHNc9Z9XN1o5wlGzajc=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-6Nh8wceDZjAg5l0ReRja9+GdB4KIvsWCY1QXjmam67Q=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-AXLRc0xjKzJRE+834SpmM7sGgV02ej3+Ji2+GkSvooE=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1114,7 +1114,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.25.0';
+const APP_VERSION = '10.25.1';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -9450,7 +9450,16 @@ const DRIVE = (() => {
               resolve(token);
             } else reject(new Error('Sign-in was cancelled'));
           },
-          error_callback: (e) => reject(new Error((e && e.type) || 'Sign-in failed'))
+          error_callback: (e) => {
+            const t = (e && (e.type || e.message)) || 'Sign-in failed';
+            /* Google's own wording here is unhelpful, so translate the two
+               that actually happen */
+            if (/invalid_client|401/.test(String(t)))
+              reject(new Error('Google does not recognise that client ID. Check it character for character in Google Cloud → APIs & Services → Credentials.'));
+            else if (/org_internal|access_denied|403/.test(String(t)))
+              reject(new Error('This Google account is not allowed to use the app yet — the consent screen is set to Internal, so only ec-aroma.com accounts can sign in.'));
+            else reject(new Error(t));
+          }
         });
         client.requestAccessToken({ prompt: interactive ? 'consent' : '' });
       } catch (e) { reject(e); }
@@ -9909,7 +9918,9 @@ const DRIVE = (() => {
     openSheet('pickSheet');
 
     const save2 = () => {
-      S.settings.driveClientId = $('drvId').value.trim();
+      /* people paste these from a message, and a stray space or a truncated
+         copy looks identical on screen but fails as "invalid client" */
+      S.settings.driveClientId = $('drvId').value.replace(/\s+/g, '').trim();
       S.settings.driveFolder = $('drvFolder').value.trim() || 'Pulse music';
       saveSettings();
     };
@@ -9922,6 +9933,12 @@ const DRIVE = (() => {
     $('drvGo').onclick = async () => {
       save2();
       if (!clientId()) { toast('Paste the client ID first'); return; }
+      if (!/^\d{6,}-[a-z0-9]{10,}\.apps\.googleusercontent\.com$/.test(clientId())) {
+        $('drvList').innerHTML = `<div class="empty"><b>That client ID does not look complete</b>
+          It should be a long number, a dash, a long code, then <b>.apps.googleusercontent.com</b> — with nothing missing at either end.<br><br>
+          What is in the box now:<br><span class="muted">${esc(clientId())}</span></div>`;
+        return;
+      }
       $('drvList').innerHTML = '<div class="empty">Asking Google…</div>';
       try {
         await auth(true);
