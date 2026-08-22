@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-B6gZl63WDewxt+bDFT13GM1AxxZA4AcDB2jFwhu6I9s=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-OjzbMxdeSYA7yAiE0/vXZxTVBKA15yk9lq3GzFFQ0sU=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-7krQo1cJfIkJdT1j30+NBf33PUoQ8N/M04MxY0/lbPM=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-OjzbMxdeSYA7yAiE0/vXZxTVBKA15yk9lq3GzFFQ0sU=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -501,10 +501,14 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
 .art.sm.folder-art{display:grid;place-items:center;font-size:20px;background:var(--card)}
 
 /* ── countdown timer ── */
-.vf-timer{position:fixed;top:calc(var(--safe-t) + 14px);left:14px;z-index:60;
-  background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.18);border-radius:999px;
-  padding:8px 15px;font-size:17px;font-weight:700;font-variant-numeric:tabular-nums;color:#fff;
-  backdrop-filter:blur(8px)}
+.vf-timer{position:fixed;top:calc(var(--safe-t) + 10px);left:10px;z-index:80;
+  display:flex;align-items:center;gap:8px;min-height:52px;min-width:112px;justify-content:center;
+  background:rgba(0,0,0,.62);border:1px solid rgba(255,255,255,.22);border-radius:999px;
+  padding:10px 20px;font-size:21px;font-weight:800;font-variant-numeric:tabular-nums;color:#fff;
+  backdrop-filter:blur(8px);box-shadow:0 6px 20px rgba(0,0,0,.45);touch-action:manipulation}
+.vf-timer::before{content:"⏱";font-size:16px;opacity:.85}
+.vf-timer:active{transform:scale(.96);background:rgba(0,0,0,.8)}
+#vizFull.rot .vf-timer{top:10px;left:10px}
 .vf-timer.urgent{background:var(--a1);border-color:transparent;animation:tmpulse 1s ease-in-out infinite}
 @keyframes tmpulse{50%{transform:scale(1.09)}}
 .tm-readout{font-size:52px;font-weight:800;text-align:center;font-variant-numeric:tabular-nums;
@@ -514,6 +518,8 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
 .tm-set label{flex:1;display:flex;flex-direction:column;gap:6px;font-size:12.5px;color:var(--mut)}
 .tm-set input{font-size:24px;text-align:center;font-variant-numeric:tabular-nums;padding:12px 4px}
 #npTimer.on{color:var(--a1)}
+.tm-chips{display:flex;flex-wrap:wrap;gap:8px}
+.tm-chips .chip{flex:1 1 auto;min-width:88px;text-align:center;padding:12px 10px}
 
 </style>
 </head>
@@ -1034,11 +1040,20 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
         <label>Minutes<input type="number" id="tmM" min="0" max="59" step="1" value="5" inputmode="numeric"></label>
         <label>Seconds<input type="number" id="tmS" min="0" max="59" step="1" value="0" inputmode="numeric"></label>
       </div>
-      <div class="row-btns" style="padding:0">
+      <div class="tm-chips">
+        <button class="chip" data-tmadd="-30">&minus;30s</button>
+        <button class="chip" data-tmadd="-60">&minus;1 min</button>
         <button class="chip" data-tmadd="30">+30s</button>
         <button class="chip" data-tmadd="60">+1 min</button>
         <button class="chip" data-tmadd="300">+5 min</button>
         <button class="chip" data-tmadd="600">+10 min</button>
+      </div>
+      <div class="muted" style="margin:14px 0 6px">Rest — one tap to start</div>
+      <div class="tm-chips">
+        <button class="chip" data-tmrest="60">1:00</button>
+        <button class="chip" data-tmrest="90">1:30</button>
+        <button class="chip" data-tmrest="120">2:00</button>
+        <button class="chip" data-tmrest="180">3:00</button>
       </div>
       <div class="row-btns" style="padding:0;margin-top:12px">
         <button class="primary big" id="tmStart">Start</button>
@@ -1078,7 +1093,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.19.0';
+const APP_VERSION = '10.20.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -2946,9 +2961,19 @@ const TIMER = {
     this.disarm(); this.stopLoop(); this.save(); this.paint();
   },
   addSeconds(n) {
-    if (this.running) { this.endAt += n * 1000; this.total += n; this.save(); this.arm(); }
-    else { this.left = Math.max(0, this.seconds() + n); this.total = Math.max(this.total, this.left); this.save(); }
+    if (this.running) {
+      const left = Math.max(0, this.seconds() + n);
+      if (left === 0) { this.reset(); toast('Timer cleared'); return; }
+      this.endAt = Date.now() + left * 1000;
+      this.total = Math.max(left, this.total + n);
+      this.save(); this.arm();
+    } else {
+      this.left = Math.max(0, this.seconds() + n);
+      this.total = Math.max(this.total, this.left);
+      this.save();
+    }
     this.paint();
+    haptic();
   },
 
   loop() { this.stopLoop(); this.iv = setInterval(() => this.tick(), 250); },
@@ -3030,6 +3055,7 @@ const TIMER = {
       if (!secs) { toast('Set at least one second'); return; }
       this.start(secs);
     });
+    els('[data-tmrest]').forEach((b) => b.onclick = () => this.start(+b.dataset.tmrest));
     els('[data-tmadd]').forEach((b) => b.onclick = () => {
       const n = +b.dataset.tmadd;
       if (this.running || this.seconds() > 0) this.addSeconds(n);
@@ -3045,7 +3071,17 @@ const TIMER = {
     const r = $('tmRepeat'); if (r) r.onchange = () => { S.settings.timerRepeat = r.checked; saveSettings(); };
     on('npTimer', () => this.open());
     const chip = $('vfTimer');
-    if (chip) chip.onclick = (ev) => { ev.stopPropagation(); ev.preventDefault(); this.open(); };
+    if (chip) {
+      /* The visualiser closes on any tap, and that listener would swallow this
+         one. Stop the tap at every stage it could travel through, so the pill
+         is a real button rather than part of the backdrop. */
+      ['pointerdown', 'touchstart', 'mousedown'].forEach((k) =>
+        chip.addEventListener(k, (ev) => { ev.stopPropagation(); }, { capture: true }));
+      chip.addEventListener('click', (ev) => {
+        ev.stopPropagation(); ev.preventDefault();
+        this.open();
+      }, { capture: true });
+    }
     /* coming back to the app: recompute from the clock, never from ticks */
     document.addEventListener('visibilitychange', () => { if (!document.hidden) this.tick(); });
   }
