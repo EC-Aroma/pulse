@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-tu878eHuhmjB0rA5m0jTGNGSDJPLYnp8xcUL9e/8PWk=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-AQklb2XSm6wOkcUumkD1eDUZeTamAisPyYotJSg9UVc=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-nTs2jiIOSwnCQe16buzoaNm8OkqqZixBcrdXdFyO7iU=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-AQklb2XSm6wOkcUumkD1eDUZeTamAisPyYotJSg9UVc=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -521,6 +521,10 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
 .tm-chips{display:flex;flex-wrap:wrap;gap:8px}
 .tm-chips .chip{flex:1 1 auto;min-width:88px;text-align:center;padding:12px 10px}
 .off-badge{background:#123024;border:1px solid #1f6b47;color:#4fe0a0;border-radius:6px;padding:2px 6px;font-size:11px}
+#installBar{position:sticky;top:0;z-index:32;display:flex;align-items:center;gap:10px;
+  padding:calc(var(--safe-t) + 10px) 12px 10px;background:linear-gradient(135deg,#12241c,#1a1d25);
+  border-bottom:1px solid var(--line)}
+#installBar span{flex:1;font-size:14px;font-weight:650}
 
 </style>
 </head>
@@ -548,6 +552,12 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
     <span id="updateText">A new version is ready</span>
     <button class="chip on" id="updateApply">Update now</button>
     <button class="text-btn" id="updateLater">Later</button>
+  </div>
+
+  <div id="installBar" class="hidden">
+    <span>Put Pulse on your home screen</span>
+    <button class="chip on" id="installGo">Install</button>
+    <button class="text-btn" id="installLater">Later</button>
   </div>
 
   <div id="findBar" class="hidden">
@@ -738,6 +748,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
             <button class="primary" id="btnDrive">Google Drive folder</button>
             <button class="ghost" id="btnCloudCheck">Cloud check &mdash; why won't it play?</button>
             <button class="ghost" id="btnInvite">Invite someone to Pulse</button>
+            <button class="ghost" id="btnInstall">Install on this phone</button>
           </div>
           <p class="hint" id="videoHint">Pick a video file (mp4, mov, webm&hellip;) and Pulse keeps just the soundtrack, re-compressed small. Nothing is uploaded &mdash; the conversion happens on your phone.<br><br>
           <b>From TikTok, X or Instagram:</b> use that app's own <b>Save video</b> button to put the file on your phone, then share it into Pulse from the Android share sheet — Pulse keeps the soundtrack and drops the picture. Paste one of their links here and Pulse tells you exactly which button to press.<br><br>
@@ -1096,7 +1107,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.23.0';
+const APP_VERSION = '10.24.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -1986,6 +1997,46 @@ function groupBy(list, key) {
   });
   return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: 'base' }));
 }
+/* Installing.
+   Chrome will offer this itself, but the offer is buried in a menu and is easy
+   to miss — which is the difference between "a website" and "an app on my
+   phone" for most people. Catch the browser's own install event and put a
+   plain button in front of it instead. */
+const INSTALL = {
+  deferred: null,
+  installed: false,
+  init() {
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      this.deferred = e;
+      if (!localStorage.getItem('pulse-install-dismissed')) $('installBar').classList.remove('hidden');
+    });
+    window.addEventListener('appinstalled', () => {
+      this.installed = true; this.deferred = null;
+      $('installBar').classList.add('hidden');
+      toast('Pulse is on your home screen');
+    });
+    const go = $('installGo'); if (go) go.onclick = () => this.go();
+    const later = $('installLater');
+    if (later) later.onclick = () => { $('installBar').classList.add('hidden'); try { localStorage.setItem('pulse-install-dismissed', '1'); } catch (e) {} };
+    const btn = $('btnInstall'); if (btn) btn.onclick = () => this.go();
+  },
+  standalone() {
+    return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  },
+  async go() {
+    if (this.standalone()) { toast('Already installed — you are running it from the home screen'); return; }
+    if (this.deferred) {
+      $('installBar').classList.add('hidden');
+      this.deferred.prompt();
+      try { await this.deferred.userChoice; } catch (e) {}
+      this.deferred = null;
+      return;
+    }
+    alert('To put Pulse on your home screen:\n\nChrome menu (⋮) at the top right → "Add to Home screen" or "Install app".\n\nIt then opens full screen with its own icon, like any other app, and works with no signal.');
+  }
+};
+
 /* Inviting someone else.
    Pulse is a web app, so there is no account and nothing to provision: the
    link IS the app. What the other person needs beyond that is the two lines
@@ -3778,6 +3829,7 @@ async function boot() {
   try { await loadAll(); } catch (e) { console.warn('storage unavailable, running in memory', e); }
   try { await FOLDERS.load(); } catch (e) {}
   try { TIMER.wire(); await TIMER.load(); } catch (e) {}
+  try { INSTALL.init(); } catch (e) {}
   /* once there are folders, sorting by title alone stacks every "01 …" from
      every set on top of each other — folder order is the tidy default */
   if (T.list().some((t) => t.folder)) S.sort = 'folder';
