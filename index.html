@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-6Nh8wceDZjAg5l0ReRja9+GdB4KIvsWCY1QXjmam67Q=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-AXLRc0xjKzJRE+834SpmM7sGgV02ej3+Ji2+GkSvooE=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-yLKbQBwgHiUDkd9M0Wyn2/C7PluOTND+WpIaNKtPDXM=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-AXLRc0xjKzJRE+834SpmM7sGgV02ej3+Ji2+GkSvooE=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -526,6 +526,22 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
   border-bottom:1px solid var(--line)}
 #installBar span{flex:1;font-size:14px;font-weight:650}
 
+/* ── workout log ── */
+.wk-card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:6px 0 10px;margin:0 0 18px}
+.wk-datebar{display:flex;align-items:center;gap:6px;padding:4px 6px}
+.wk-date{flex:1;text-align:center}
+.wk-day{font-size:20px;font-weight:800;letter-spacing:-.01em}
+.wk-full{font-size:12.5px;color:var(--mut);margin-top:1px}
+.wk-card .segmented{padding:6px 12px 2px}
+.wk-row{padding-left:12px}
+.wk-row.done .r-title{color:var(--ok)}
+.wk-tick{width:24px;text-align:center;color:var(--ok);font-weight:800}
+.wk-set{display:flex;align-items:flex-end;gap:8px;margin-bottom:10px}
+.wk-set .wk-n{width:20px;text-align:center;color:var(--mut);font-weight:700;padding-bottom:12px}
+.wk-set label{flex:1;display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--mut)}
+.wk-set input{font-size:19px;text-align:center;font-variant-numeric:tabular-nums;padding:11px 4px}
+.wk-set select{padding:11px 6px}
+
 </style>
 </head>
 <body>
@@ -620,6 +636,25 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
     <!-- Gym -->
     <section class="view hidden" id="view-gym">
       <div class="gym-wrap">
+
+        <!-- ── Workout log ───────────────────────────────────── -->
+        <div class="wk-card">
+          <div class="wk-datebar">
+            <button class="icon-btn" id="wkPrev" aria-label="Day before"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+            <div class="wk-date">
+              <div class="wk-day" id="wkDay">Today</div>
+              <div class="wk-full" id="wkFull"></div>
+            </div>
+            <button class="icon-btn" id="wkNext" aria-label="Day after"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+          </div>
+          <div class="segmented" id="wkDays"></div>
+          <div id="wkList" class="list"></div>
+          <div class="row-btns">
+            <button class="ghost" id="wkAddEx">+ Add an exercise</button>
+            <button class="ghost" id="wkHistory">History</button>
+          </div>
+        </div>
+
         <div class="gym-head">
           <div>
             <div class="gym-kicker">Session</div>
@@ -1088,6 +1123,25 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
     </div>
   </div>
 
+  <!-- ── Logging one exercise ───────────────────────────────── -->
+  <div class="sheet" id="wkSheet">
+    <div class="sheet-head">
+      <button class="text-btn" id="wkClose">Close</button>
+      <b id="wkExName">Exercise</b>
+      <button class="text-btn strong" id="wkRest">Rest 1:30</button>
+    </div>
+    <div class="sheet-body">
+      <div class="muted" id="wkTarget"></div>
+      <div class="card muted" id="wkLast" style="margin:10px 0"></div>
+      <div id="wkSets"></div>
+      <div class="row-btns" style="padding:0;margin-top:12px">
+        <button class="primary big" id="wkAddSet">+ Add set</button>
+      </div>
+      <p class="hint" style="padding:0">Weight and reps only — everything else is remembered. The next set starts
+      from the last one, so a straight three-setter is three taps. Numbers are saved as you type.</p>
+    </div>
+  </div>
+
   <div id="toast" class="hidden"></div>
 
   <input type="file" id="fileInput" accept="audio/*,.mp3,.m4a,.aac,.flac,.ogg,.opus,.wav,.wma" multiple hidden>
@@ -1114,7 +1168,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.25.1';
+const APP_VERSION = '10.26.0';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -2004,6 +2058,251 @@ function groupBy(list, key) {
   });
   return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: 'base' }));
 }
+/* ============================================================
+   Workout log
+   Your programme, already typed in. Pick the day, tap the exercise, put in
+   weight and reps. Everything else — the exercise names, the set counts, the
+   loads you used last time — is remembered, so logging a set is two numbers
+   and nothing else.
+   ============================================================ */
+const WK = {
+  /* Ced's split, as recorded on 17–22 August. Targets are what you did last
+     time we wrote it down; they are hints, not rules. */
+  DAYS: [
+    { id: 'legs-sh', name: 'Legs / Shoulders', ex: [
+      { n: 'Hack squat', t: '3 sets · 2 × 40 kg' },
+      { n: 'Leg extension', t: '3 sets' },
+      { n: 'Leg press', t: '3 sets' },
+      { n: 'Seated leg curl', t: '3 sets · seated beats lying' },
+      { n: 'Seated calf extension', t: '3 sets' },
+      { n: 'Arnold press (dumbbells)', t: '3 sets' },
+      { n: 'Side delt cable (straps)', t: '3 sets' },
+      { n: 'Rear delt cable', t: '3 sets' }
+    ] },
+    { id: 'chest-tri', name: 'Chest / Triceps', ex: [
+      { n: 'Converging chest press', t: '3 sets · 35 kg' },
+      { n: 'Incline DB press', t: '3 sets · 17.5 kg/side' },
+      { n: 'Cable fly, downward', t: '3 sets · 15 kg/side' },
+      { n: 'Rope triceps pulldown', t: '3 sets' },
+      { n: 'Rope overhead triceps', t: '3 sets' },
+      { n: 'Triceps extension machine', t: '3 sets' }
+    ] },
+    { id: 'back-bi-sh', name: 'Back / Biceps / Shoulders', ex: [
+      { n: 'Lat pulldown', t: '120 lb, drop to 100' },
+      { n: 'Diverging seated row', t: '70 / 80 / 90 kg' },
+      { n: 'Rope straight-arm pulldown', t: '40 / 40 / 35 kg' },
+      { n: 'Cable rope face pull', t: '35 kg' },
+      { n: 'Incline DB curl', t: '10 / 10 / 7.5 kg' },
+      { n: 'Single-arm cable curl', t: '15 kg/arm' },
+      { n: 'Side delt cable (straps)', t: '3 sets' },
+      { n: 'Rear delt cable', t: '3 sets' }
+    ] },
+    { id: 'legs-abs', name: 'Legs / Abs', ex: [
+      { n: 'Single-leg press', t: '3 × 12 · 30 kg/leg' },
+      { n: 'Seated leg curl', t: '3 × 12 · 45 kg' },
+      { n: 'Single-leg standing hamstring curl', t: '3 sets' },
+      { n: 'Dumbbell RDL', t: '3 sets · added for the hinge' },
+      { n: 'Split squat or walking lunge', t: '3 sets · from w/c 24 Aug' },
+      { n: 'Standing calf', t: '3 × 12 · 90 kg' },
+      { n: 'Abduction machine', t: '3 sets' },
+      { n: 'Adduction machine', t: '3 sets' },
+      { n: 'Weighted plank, 8 kg', t: '8 × 45s work / 20s rest' }
+    ] },
+    { id: 'chest-tri-sh', name: 'Chest / Triceps / Shoulders', ex: [
+      { n: 'Cable fly, downward', t: '3 sets · 15 kg/side' },
+      { n: 'Rope triceps pulldown', t: '3 sets' },
+      { n: 'Rear delt cable', t: '3 sets' },
+      { n: 'Rope overhead triceps', t: '3 sets' },
+      { n: 'Side delt cable (straps)', t: '3 sets' },
+      { n: 'Triceps extension machine', t: '3 sets' },
+      { n: 'Incline DB press', t: '3 sets · 17.5 kg/side' },
+      { n: 'DB shoulder press', t: '3 sets · 12.5 kg/side' },
+      { n: 'Converging chest press', t: '3 sets · 35 kg' }
+    ] },
+    { id: 'back-bi-abs', name: 'Back / Biceps / Abs', ex: [
+      { n: 'Rope straight-arm pulldown', t: '12@40, 8@40, 10@35 kg' },
+      { n: 'Single-arm cable curl', t: '15 kg/arm' },
+      { n: 'Cable rope face pull', t: '35 kg' },
+      { n: 'Reverse cable curl', t: '30 kg' },
+      { n: 'Lat pulldown', t: '12/10/6 @ 120 lb, drop 100' },
+      { n: 'Smith machine shrugs', t: '2 × 20 kg' },
+      { n: 'Incline DB curl', t: '12@10, 8@10, 12@7.5 kg' },
+      { n: 'Diverging seated row', t: '12@70, 10@80, 8@90 kg' },
+      { n: 'Back extension', t: 'bodyweight, then 24 kg kettlebell' },
+      { n: 'Abs bench', t: '8 × 40s work / 60s rest' }
+    ] }
+  ],
+
+  log: {},            /* '2026-08-12' -> { day, sets: { exercise: [{w,r,u}] }, extra: [names] } */
+  date: null,
+  ex: null,
+
+  key(d) {
+    const z = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + z(d.getMonth() + 1) + '-' + z(d.getDate());
+  },
+  async load() {
+    try { this.log = (await DB.get('kv', 'workouts')) || {}; } catch (e) { this.log = {}; }
+    this.date = this.key(new Date());
+  },
+  save() { try { DB.put('kv', this.log, 'workouts'); } catch (e) {} },
+  entry(k) {
+    const d = k || this.date;
+    if (!this.log[d]) this.log[d] = { day: '', sets: {}, extra: [] };
+    if (!this.log[d].extra) this.log[d].extra = [];
+    return this.log[d];
+  },
+  dayDef(id) { return this.DAYS.find((d) => d.id === id) || null; },
+
+  /* the same exercise, the last day it was actually logged */
+  lastTime(name) {
+    const days = Object.keys(this.log).filter((k) => k < this.date).sort().reverse();
+    for (const k of days) {
+      const sets = (this.log[k].sets || {})[name];
+      if (sets && sets.length) return { date: k, sets };
+    }
+    return null;
+  },
+  fmtSets(sets) {
+    return sets.map((s) => `${s.w ? s.w + (s.u || 'kg') : 'BW'}${s.r ? ' × ' + s.r : ''}`).join(', ');
+  },
+  volume(k) {
+    const e = this.log[k];
+    if (!e) return { sets: 0, kg: 0 };
+    let n = 0, kg = 0;
+    Object.values(e.sets || {}).forEach((arr) => arr.forEach((s) => {
+      n++;
+      const w = (s.u === 'lb' ? (+s.w || 0) * 0.4536 : (+s.w || 0));
+      kg += w * (+s.r || 0);
+    }));
+    return { sets: n, kg: Math.round(kg) };
+  },
+
+  /* ---------- the day's screen ---------- */
+  render() {
+    const box = $('wkList');
+    if (!box) return;
+    const d = new Date(this.date + 'T12:00:00');
+    const today = this.key(new Date());
+    const names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    $('wkDay').textContent = this.date === today ? 'Today' : names[d.getDay()];
+    $('wkFull').textContent = `${names[d.getDay()]} ${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
+
+    const e = this.entry();
+    $('wkDays').innerHTML = this.DAYS.map((x) =>
+      `<button data-wkday="${x.id}" class="${e.day === x.id ? 'on' : ''}">${esc(x.name)}</button>`).join('');
+
+    const def = this.dayDef(e.day);
+    const list = (def ? def.ex.slice() : []).concat(e.extra.map((n) => ({ n, t: 'added by you' })));
+    if (!def && !e.extra.length) {
+      box.innerHTML = `<div class="empty"><b>Pick the day above</b>The exercises come up ready — you only put in weight and reps.</div>`;
+    } else {
+      const vol = this.volume(this.date);
+      box.innerHTML = list.map((x) => {
+        const done = (e.sets[x.n] || []);
+        const last = this.lastTime(x.n);
+        return `<div class="row wk-row ${done.length ? 'done' : ''}" data-wkex="${esc(x.n)}">
+          <div class="wk-tick">${done.length ? '✓' : ''}</div>
+          <div class="r-meta"><div class="r-title">${esc(x.n)}</div>
+            <div class="r-sub">${done.length ? esc(this.fmtSets(done))
+              : (last ? 'last time: ' + esc(this.fmtSets(last.sets)) : esc(x.t || ''))}</div></div>
+          <div class="r-right">${done.length ? done.length + ' set' + (done.length === 1 ? '' : 's') : ''}</div>
+        </div>`;
+      }).join('') + (vol.sets
+        ? `<div class="pad muted">${vol.sets} sets logged${vol.kg ? ' · ' + vol.kg.toLocaleString() + ' kg total volume' : ''}</div>` : '');
+    }
+    els('[data-wkday]', $('wkDays')).forEach((b) => b.onclick = () => {
+      const en = this.entry();
+      en.day = en.day === b.dataset.wkday ? '' : b.dataset.wkday;
+      this.save(); this.render();
+    });
+    els('[data-wkex]', box).forEach((r) => r.onclick = () => this.open(r.dataset.wkex));
+  },
+
+  step(days) {
+    const d = new Date(this.date + 'T12:00:00');
+    d.setDate(d.getDate() + days);
+    if (this.key(d) > this.key(new Date())) { toast('That day has not happened yet'); return; }
+    this.date = this.key(d);
+    this.render();
+  },
+
+  /* ---------- one exercise ---------- */
+  open(name) {
+    this.ex = name;
+    const e = this.entry();
+    const def = this.dayDef(e.day);
+    const meta = def ? def.ex.find((x) => x.n === name) : null;
+    $('wkExName').textContent = name;
+    $('wkTarget').textContent = meta ? meta.t : '';
+    const last = this.lastTime(name);
+    $('wkLast').innerHTML = last
+      ? `Last time (${esc(last.date)}): <b>${esc(this.fmtSets(last.sets))}</b>`
+      : 'First time logging this one.';
+    this.paintSets();
+    openSheet('wkSheet');
+  },
+  paintSets() {
+    const e = this.entry();
+    const sets = e.sets[this.ex] || [];
+    $('wkSets').innerHTML = sets.map((s, i) => `<div class="wk-set">
+        <span class="wk-n">${i + 1}</span>
+        <label>Weight<input type="number" step="0.5" min="0" inputmode="decimal" data-wkw="${i}" value="${s.w === '' || s.w === null ? '' : s.w}"></label>
+        <select data-wku="${i}"><option value="kg"${s.u !== 'lb' ? ' selected' : ''}>kg</option><option value="lb"${s.u === 'lb' ? ' selected' : ''}>lb</option></select>
+        <label>Reps<input type="number" step="1" min="0" inputmode="numeric" data-wkr="${i}" value="${s.r === '' || s.r === null ? '' : s.r}"></label>
+        <button class="icon-btn" data-wkdel="${i}" aria-label="Remove set">✕</button>
+      </div>`).join('') || '<div class="muted">No sets yet — tap Add set.</div>';
+
+    const on = (sel, fn) => els(sel, $('wkSets')).forEach((n) => n.oninput = n.onchange = () => fn(n));
+    on('[data-wkw]', (n) => { sets[+n.dataset.wkw].w = n.value === '' ? '' : +n.value; this.save(); this.render(); });
+    on('[data-wkr]', (n) => { sets[+n.dataset.wkr].r = n.value === '' ? '' : +n.value; this.save(); this.render(); });
+    on('[data-wku]', (n) => { sets[+n.dataset.wku].u = n.value; this.save(); this.render(); });
+    els('[data-wkdel]', $('wkSets')).forEach((b) => b.onclick = () => {
+      sets.splice(+b.dataset.wkdel, 1);
+      if (!sets.length) delete e.sets[this.ex];
+      this.save(); this.paintSets(); this.render();
+    });
+  },
+  addSet() {
+    const e = this.entry();
+    if (!e.sets[this.ex]) e.sets[this.ex] = [];
+    const arr = e.sets[this.ex];
+    /* start from the set before, or from what you lifted last time */
+    const prev = arr[arr.length - 1] || (this.lastTime(this.ex) || { sets: [] }).sets.slice(-1)[0] || { w: '', r: '', u: 'kg' };
+    arr.push({ w: prev.w, r: prev.r, u: prev.u || 'kg' });
+    this.save(); this.paintSets(); this.render(); haptic();
+  },
+
+  history() {
+    const days = Object.keys(this.log).filter((k) => this.volume(k).sets).sort().reverse().slice(0, 60);
+    if (!days.length) { toast('Nothing logged yet'); return; }
+    const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const lines = days.map((k) => {
+      const v = this.volume(k), def = this.dayDef(this.log[k].day);
+      const d = new Date(k + 'T12:00:00');
+      return `${names[d.getDay()]} ${k}  ${String(v.sets).padStart(3)} sets  ${String(v.kg).padStart(7)} kg  ${def ? def.name : ''}`;
+    });
+    OPS.showLog('WORKOUT HISTORY\n\n' + lines.join('\n'));
+  },
+
+  wire() {
+    const on = (id, fn) => { const n = $(id); if (n) n.onclick = fn; };
+    on('wkPrev', () => this.step(-1));
+    on('wkNext', () => this.step(1));
+    on('wkClose', () => closeSheet('wkSheet'));
+    on('wkAddSet', () => this.addSet());
+    on('wkRest', () => { TIMER.start(90); toast('Rest 1:30 started'); });
+    on('wkHistory', () => this.history());
+    on('wkAddEx', () => {
+      const n = prompt('Exercise name'); if (!n || !n.trim()) return;
+      const e = this.entry();
+      if (!e.extra.includes(n.trim())) e.extra.push(n.trim());
+      this.save(); this.render(); this.open(n.trim());
+    });
+  }
+};
+
 /* Installing.
    Chrome will offer this itself, but the offer is buried in a menu and is easy
    to miss — which is the difference between "a website" and "an app on my
@@ -3382,6 +3681,8 @@ function paintTimer() {
   $('hudTimerToggle').textContent = G.phase === 'idle' || G.phase === 'done' ? 'Start timer' : (G.running ? 'Pause timer' : 'Resume timer');
 }
 function renderGymExtras() {
+  /* the day, the date and today's sets, at the top of the gym screen */
+  try { if (WK.date) { WK.date = WK.key(new Date()) > WK.date && !WK.entry(WK.date).day ? WK.key(new Date()) : WK.date; WK.render(); } } catch (e) {}
   $('cfgWork').value = S.settings.work; $('cfgRest').value = S.settings.rest;
   $('cfgRounds').value = S.settings.rounds; $('cfgPrep').value = S.settings.prep;
   $('optDuck').checked = S.settings.duck; $('optBeep').checked = S.settings.beep;
@@ -3837,6 +4138,7 @@ async function boot() {
   try { await FOLDERS.load(); } catch (e) {}
   try { TIMER.wire(); await TIMER.load(); } catch (e) {}
   try { INSTALL.init(); } catch (e) {}
+  try { WK.wire(); await WK.load(); WK.render(); } catch (e) {}
   /* once there are folders, sorting by title alone stacks every "01 …" from
      every set on top of each other — folder order is the tidy default */
   if (T.list().some((t) => t.folder)) S.sort = 'folder';
