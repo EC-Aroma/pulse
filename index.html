@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
 <title>Pulse</title>
 <link rel="manifest" href="./manifest.webmanifest">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-yLKbQBwgHiUDkd9M0Wyn2/C7PluOTND+WpIaNKtPDXM=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-AXLRc0xjKzJRE+834SpmM7sGgV02ej3+Ji2+GkSvooE=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-AKgBfnTVHtR3DCeFei7P+RP0YKRGdYeW48ZUaRxgEm0=' 'sha256-qDi7XkipTZKdL+W1R6uMA6zdRlQjD4YT75lpcNGHMt0=' 'sha256-c9US5C1C3NZ+KZSvgLNP1Ix+AWJrZiaY2Sl47lXROgs=' 'sha256-ZaiHWNEei+5tWFmWZBl54Topn6f5PuoBe/JcyCPEegQ=' https://accounts.google.com https://itunes.apple.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://archive.org https://*.archive.org https://www.googleapis.com https://musicbrainz.org https://*.musicbrainz.org https://coverartarchive.org https://*.coverartarchive.org https://itunes.apple.com; worker-src 'self'; manifest-src 'self'; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'; object-src 'none';">
 <meta name="theme-color" content="#0b0c10">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1168,7 +1168,7 @@ mark.findhit.current{background:var(--a1);color:#fff;box-shadow:0 0 0 2px var(--
    ============================================================ */
 'use strict';
 
-const APP_VERSION = '10.26.0';
+const APP_VERSION = '10.26.1';
 
 /* ---------- tiny helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -9706,6 +9706,13 @@ const DRIVE = (() => {
   const clientId = () => (S.settings.driveClientId || '').trim();
   const folderName = () => (S.settings.driveFolder || 'Pulse music').trim();
 
+  let gisPreload = null;
+  /* Chrome only lets a sign-in window open as the direct result of a tap, and
+     that permission expires in a few seconds. Downloading Google's script
+     inside the tap used to eat the whole budget — the window was then refused
+     and the app said "popup failed to open". So the script is fetched as soon
+     as the Drive screen appears, long before you press Connect. */
+  function preloadGis() { if (!gisPreload) gisPreload = loadGis().catch(() => { gisPreload = null; }); }
   function loadGis() {
     if (gisLoaded) return Promise.resolve(true);
     return new Promise((resolve, reject) => {
@@ -9756,7 +9763,9 @@ const DRIVE = (() => {
             const t = (e && (e.type || e.message)) || 'Sign-in failed';
             /* Google's own wording here is unhelpful, so translate the two
                that actually happen */
-            if (/invalid_client|401/.test(String(t)))
+            if (/popup_failed_to_open|popup_closed/.test(String(t)))
+              reject(new Error('Chrome would not open the Google sign-in window. Tap Connect once more — it works on the second try — and if it still refuses, allow pop-ups for this site in Chrome.'));
+            else if (/invalid_client|401/.test(String(t)))
               reject(new Error('Google does not recognise that client ID. Check it character for character in Google Cloud → APIs & Services → Credentials.'));
             else if (/org_internal|access_denied|403/.test(String(t)))
               reject(new Error('This Google account is not allowed to use the app yet — the consent screen is set to Internal, so only ec-aroma.com accounts can sign in.'));
@@ -9840,6 +9849,7 @@ const DRIVE = (() => {
   }
 
   function autoConnect() {
+    if (clientId()) preloadGis();                    /* ready before the first tap */
     if (S.settings.driveAuto === false) return;      /* on unless turned off */
     setTimeout(quietRenew, 1500);          /* let the app finish opening first */
     clearInterval(renewTimer);
@@ -10198,6 +10208,7 @@ const DRIVE = (() => {
 
   /* ---------- screen ---------- */
   async function open() {
+    preloadGis();
     $('pkTitle').textContent = 'Google Drive';
     $('pkList').dataset.ctx = '{}';
     $('pkList').innerHTML = `<div class="pad">
